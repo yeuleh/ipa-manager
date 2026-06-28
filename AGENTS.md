@@ -2,7 +2,7 @@
 
 项目级协作约定与上下文，供 AI 代理（及人类协作者）快速理解本项目。
 
-<!-- mindtrek-bootstrap:start stage="config-confirmed" -->
+<!-- mindtrek-bootstrap:start stage="scaffolded" -->
 ## 项目：ipa-manager
 
 **是什么**：macOS CLI 工具，管理多个 Apple 账号下 iOS 应用（`.ipa`）的全生命周期——登录/切换账号、按账号隔离下载与本地管理、推送到 iOS 设备安装/更新。
@@ -21,13 +21,20 @@
 - **交互框架（v1）**：cobra + lipgloss + 交互提示库（精简 CLI，组合 A）；全屏 TUI（bubbletea）为未来升级路径
 - 详见 `docs/bootstrap/tech-stack.md` 与 `docs/bootstrap/decisions/0001-tech-stack.md`
 
+## 结构
+
+- `cmd/ipa-manager/` 入口；`internal/{cli,account,appstore,device,library,config,doctor,ui}` 业务包（均 `internal`，不对外暴露）
+- **核心设计**：`account.ProfileKeychain` 把 ipatool 固定 key `"account"` 按 profile namespace 化，实现多账号隔离（ADR 0002）
+- 脚手架已通过 `go build ./...` / `go test ./...` / `go vet ./...` 全绿（ipatool + go-ios + cobra + lipgloss + huh 同时编译验证通过）
+- 详见 `docs/bootstrap/scaffold-result.md` 与 `docs/bootstrap/decisions/0002-multi-account-isolation.md`
+
 ## Bootstrap 进度
 
 - **Stage 1 — 需求讨论**：✅ 完成。详见 `docs/bootstrap/requirements.md`
 - **Stage 2 — 技术选型**：✅ 完成（组合 A：精简 CLI）。详见 `docs/bootstrap/tech-stack.md`
 - Stage 3 — 研究：⏳ 待开始 → ✅ 完成。详见 `docs/bootstrap/research.md`（含 ipatool 多账号 keychain 模式、go-ios 集成 API、huh/cobra/lipgloss 选型、目录结构）
 - Stage 4 — 配置方案：⏳ 待开始 → ✅ 完成（经 Spock 评审 GO-WITH-FIXES，已纳入全部修正）。详见 `docs/bootstrap/config-plan.md`
-- Stage 5 — 脚手架：⏳ 待开始
+- Stage 5 — 脚手架：⏳ 待开始 → ✅ 完成（骨架可编译/测试，ProfileKeychain 隔离已实现+测试通过）。详见 `docs/bootstrap/scaffold-result.md`
 - Stage 6 — 工作区初始化：⏳ 待开始
 
 ## 已知风险（贯穿全项目）
