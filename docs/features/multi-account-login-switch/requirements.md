@@ -388,7 +388,7 @@ ipa-manager
 | **NFR-02** | Performance（login）| `auth login` 端到端延迟主要由 Apple API 响应决定。**测量边界**：从 ipatool `Login` 返回（成功或最后的失败）到 CLI 进程退出，期间由 ipa-manager 自身贡献的耗时（keychain 写、config 写、状态渲染）< 1s。Apple API 往返时间不计入。|
 | **NFR-03** | Reliability（幂等）| `auth logout` 对已 logged-out profile 幂等（AC-05-5）；`accounts remove` 对已删除 profile 不幂等——第二次以「不存在」错误退出（AC-04-5）。|
 | **NFR-04** | Reliability（级联）| `accounts remove` 必须级联清理 keychain namespace + cookie jar + 元数据；任一级联步骤失败 → 命令 exit 非零并报告失败部分（不静默部分成功）。|
-| **NFR-05** | Security | Apple ID password **绝不**写盘（不进 config 文件、不进 keychain、不进日志）。只有 ipatool 返回的 account token JSON 进 keychain。 |
+| **NFR-05** | Security | Apple ID password **不进** `config.json`（明文配置文件）、**不进**日志（任何级别）。**已知行为**：ipatool 的 `Account` 结构体含 `Password` 字段，`Login()` 成功后会把含该字段的 account JSON 写入 keychain（key=`profiles/<id>/account`，受 macOS Keychain 加密保护）——这是 ipatool 的固有设计，本项目不额外脱敏（依据：design 阶段 ipatool v2.3.0 源码研究，见 §11 Design-Phase Discovery）。威胁模型：能解锁本机 keychain 的攻击者本来就能获取所有 account token；password 字段不改变这一边界。|
 | **NFR-06** | Privacy | Profile 元数据（含 email）明文存于 `~/.ipa-manager/config.json`——这是可接受的（email 对本机用户已可见）。无遥测、无上报。|
 | **NFR-07** | Usability | 所有交互提示用 `huh`（统一 TUI 风格）。ipa-manager 自身产生的命令错误人可读 + 含下一步建议（AC-07-3，含排除项）。退出码：0 = 成功，非零 = 失败。|
 | **NFR-08** | Compatibility | 仅支持 macOS（依赖 Keychain）。Go ≥ 1.26（依赖 go-ios v1.2.0 要求）。|
@@ -467,6 +467,19 @@ ipa-manager
 | 复审回归：AC-04-4（确认拒绝 = exit 0）与 AC-07-3（把"确认拒绝"列为错误）冲突 | MAJOR（回归）| AC-07-3 范围排除项新增「用户在确认提示中选 no —— 合法成功取消（AC-04-4）」|
 | AC-05-7 标题与正文不符（标题说"报错"但当前 scope 命令 exit 0）| MINOR | 标题改为「active 可合法指向 logged-out profile（状态契约）」|
 | R3 对 NFR-04 的引用过度泛化（NFR-04 只覆盖 remove 级联）| MINOR | R3 缓解措施改为「`accounts remove` 的级联失败由 NFR-04 兜底；其他写竞争不在覆盖范围」|
+
+### Design-Phase Discovery（spec 缺陷修正）
+
+**发现来源**：design 阶段研究 ipatool v2.3.0 源码（`pkg/appstore/account.go` + `appstore_login.go`）。
+
+**问题**：原 NFR-05 写「password 不进 keychain」，但 ipatool 的 `Account` 结构体包含 `Password string` 字段，`Login()` 成功后执行 `json.Marshal(acc).keychain.Set("account", data)`，即含 password 的 JSON 必然进 keychain。原 NFR-05 不可达成。
+
+**修正**：NFR-05 已更新为：
+- password 不进 `config.json`（可保证）✓
+- password 不进日志（可保证，我们自写 CLI 层）✓
+- password 进 keychain（受 macOS Keychain 加密）—— ipatool 固有行为，不额外脱敏
+
+**用户决策**：选 Option A（接受 ipatool 行为），2026-06-29 确认。替代方案 Option B（ProfileKeychain.Set 拦截脱敏）/ Option C（post-process keychain）被否——理由是边际安全增益不抵 ipatool schema 耦合成本。
 
 ---
 
