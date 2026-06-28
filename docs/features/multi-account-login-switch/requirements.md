@@ -206,10 +206,10 @@ ipa-manager
 
 ### US-01 — 首次添加账号
 
-**AC-01-1 — 首次登录创建 profile**
-- **Given**：尚无 email 为 `alice@example.com` 的 profile。
+**AC-01-1 — 登录创建 profile**
+- **Given**：尚无 email 为 `alice@example.com` 的 profile（其他 profile 可能存在）。
 - **When**：运行 `auth login`，交互输入 `email=alice@example.com`、有效 password、需要的 2FA code。
-- **Then**：命令以 exit 0 退出；输出确认登录成功；随后 `accounts list` 显示一个 profile，其 ID 为 `alice_example_com`，状态为 logged-in；它不是 active（除非是首个 profile，见 AC-01-3）。
+- **Then**：命令以 exit 0 退出；输出确认登录成功；随后 `accounts list` 显示一个 ID 为 `alice_example_com` 的 profile，状态为 logged-in。本 AC 不断言 active 状态——active 行为由 AC-01-3 / AC-01-4 分别覆盖。
 
 **AC-01-2 — 派生 ID 算法**
 - **Given**：任意 email 输入。
@@ -243,10 +243,10 @@ ipa-manager
 - **When**：运行 `accounts use alice_example_com`。
 - **Then**：exit 非零；stderr 包含「无凭据/未登录，请先 `auth login`」（或等义）的提示；active 未改变。
 
-**AC-02-4 — `use` 不发起网络请求**
-- **Given**：profile 已 logged-in。
-- **When**：运行 `accounts use <id>`。
-- **Then**：命令在 < 500ms 内完成（验证 `use` 是纯本地指针操作，不验证 Apple token 有效性）。
+**AC-02-4 — `use` 是本地操作（不依赖网络）**
+- **Given**：profile `bob_example_com` 处于 logged-in；Apple API 不可达（无网络 / Apple 服务下线）。
+- **When**：运行 `accounts use bob_example_com`。
+- **Then**：exit 0；`accounts list` 显示 active 已切换为 `bob_example_com`。**性能约束**：见 NFR-01（< 500ms），作为该约束的旁证。
 
 ### US-03 — 列举账号
 
@@ -292,10 +292,15 @@ ipa-manager
 - **When**：`accounts remove ghost_example_com`。
 - **Then**：exit 非零；stderr 提示「profile 不存在」；不弹出确认提示（快速失败）。
 
-**AC-04-6 — 删除后凭据不可用**
+**AC-04-6 — 删除后该 ID 行为如同从未存在**
 - **Given**：profile `bob_example_com` 已通过 `accounts remove` 删除。
-- **When**：用相同 email 再次 `auth login`。
-- **Then**：视为全新 profile（AC-01-3 行为：若此时无其他 profile，自动成为 active；若有，则非 active），即旧凭据确实被清除而非复用。
+- **When**：分别运行 `accounts list`、`accounts use bob_example_com`、`auth logout bob_example_com`、`accounts remove bob_example_com`。
+- **Then**：四个命令的表现均与该 profile 从未存在时一致——`list` 不显示它；`use`/`logout`/`remove` 以「profile 不存在」错误退出（参考 AC-02-2 / AC-05-3 / AC-04-5）。
+
+**AC-04-7 — 删除后同 email 再 login 走全新流程**
+- **Given**：profile `bob_example_com` 已被删除。
+- **When**：用相同 email `bob@example.com` 再次运行 `auth login`，并输入完整凭据（password + 2FA）。
+- **Then**：登录成功（exit 0）；`accounts list` 显示 `bob_example_com` 为 logged-in；其 active 行为遵循 AC-01-3 / AC-01-4（取决于此刻是否已有其他 profile）。本 AC 仅断言"再 login 必须重新提供凭据"，不断言内部 keychain 状态。
 
 ### US-05 — 登出
 
@@ -329,6 +334,11 @@ ipa-manager
 - **When**：运行 `auth logout alice_example_com`。
 - **Then**：`accounts list` 仍显示该 profile，email/name 字段不变。
 
+**AC-05-7 — active 可合法指向 logged-out profile（状态契约）**
+- **Given**：active 为 `alice_example_com`，但该 profile 处于 logged-out 状态（如刚执行过 `auth logout` 无参数）。
+- **When**：运行 `auth logout`（无参数，再次登出 active）。
+- **Then**：遵循 AC-05-5 的幂等行为（exit 0，状态仍 logged-out）。本 AC 主要作为**契约声明**：active 指向 logged-out profile 是合法的中间状态，本 mission 范围内唯一会消费 active 的命令是 `auth logout`，其行为已由 AC-05-5 定义。后续 mission（如 `install`、`apps search`）依赖 active 时，**必须**在 active 指向 logged-out profile 时以「active profile 未登录，请先 `auth login`」错误退出——此契约由本 AC 显式确立，后续 mission 不得违反。
+
 ### US-06 — 2FA 登录
 
 **AC-06-1 — 2FA 提示与重试**
@@ -358,10 +368,15 @@ ipa-manager
 - **When**：在任意提示阶段按 Ctrl-C。
 - **Then**：exit 非零（标准信号）；`accounts list` 不出现新 profile；已有 profile 状态不变。
 
-**AC-07-3 — 所有错误附下一步建议**
-- **Given**：任何命令失败。
-- **When**：捕获到错误。
+**AC-07-3 — ipa-manager 自身产生的命令错误附下一步建议**
+- **Given**：ipa-manager 自身的参数校验、profile 查找、状态检查等逻辑产生错误（如 profile 不存在、profile 未登录、无 active profile 等）。
+- **When**：错误被捕获并输出到 stderr。
 - **Then**：stderr 在错误描述后附一句简短「下一步建议」（如 profile 不存在 → 「运行 `accounts list` 查看可用 profile」；logged-out → 「运行 `auth login` 重新登录」）。
+- **范围排除**（不要求下一步建议）：
+  - 用户主动取消（Ctrl-C / 信号）—— 由 AC-07-2 覆盖；
+  - **用户在确认提示中选「no」**—— 这是合法的成功取消（见 AC-04-4，exit 0），不视为错误；
+  - ipatool / go-ios / cobra 等第三方库透传的原始错误（如 Apple 返回的认证失败原文）—— 应原样呈现，但**可选**附加 ipa-manager 的解读提示；
+  - Go 运行时 panic 或致命错误 —— 仅需非零退出码。
 
 ---
 
@@ -369,13 +384,13 @@ ipa-manager
 
 | ID | 维度 | 度量 |
 |----|------|------|
-| **NFR-01** | Performance（本地命令）| `accounts list` / `use` / `remove` 在 profile 数 ≤ 10 时 < 500ms 完成（纯本地文件 + keychain 读，无网络）。|
-| **NFR-02** | Performance（login）| `auth login` 端到端延迟主要由 Apple API 响应决定；CLI 自身开销（提示、keychain 写、config 写）< 1s。|
+| **NFR-01** | Performance（本地命令）| `accounts list` / `use` / `remove` 在 profile 数 ≤ 10 时端到端 < 500ms 完成（wall clock）。验证手段：在 Apple API 不可达的环境下运行仍满足——这表明命令不依赖网络往返。|
+| **NFR-02** | Performance（login）| `auth login` 端到端延迟主要由 Apple API 响应决定。**测量边界**：从 ipatool `Login` 返回（成功或最后的失败）到 CLI 进程退出，期间由 ipa-manager 自身贡献的耗时（keychain 写、config 写、状态渲染）< 1s。Apple API 往返时间不计入。|
 | **NFR-03** | Reliability（幂等）| `auth logout` 对已 logged-out profile 幂等（AC-05-5）；`accounts remove` 对已删除 profile 不幂等——第二次以「不存在」错误退出（AC-04-5）。|
 | **NFR-04** | Reliability（级联）| `accounts remove` 必须级联清理 keychain namespace + cookie jar + 元数据；任一级联步骤失败 → 命令 exit 非零并报告失败部分（不静默部分成功）。|
 | **NFR-05** | Security | Apple ID password **绝不**写盘（不进 config 文件、不进 keychain、不进日志）。只有 ipatool 返回的 account token JSON 进 keychain。 |
 | **NFR-06** | Privacy | Profile 元数据（含 email）明文存于 `~/.ipa-manager/config.json`——这是可接受的（email 对本机用户已可见）。无遥测、无上报。|
-| **NFR-07** | Usability | 所有交互提示用 `huh`（统一 TUI 风格）。所有错误信息人可读 + 含下一步建议（AC-07-3）。退出码：0 = 成功，非零 = 失败。|
+| **NFR-07** | Usability | 所有交互提示用 `huh`（统一 TUI 风格）。ipa-manager 自身产生的命令错误人可读 + 含下一步建议（AC-07-3，含排除项）。退出码：0 = 成功，非零 = 失败。|
 | **NFR-08** | Compatibility | 仅支持 macOS（依赖 Keychain）。Go ≥ 1.26（依赖 go-ios v1.2.0 要求）。|
 | **NFR-09** | Observability | `auth login` 在关键阶段输出进度（如「正在联系 Apple...」「2FA 已发送」「登录成功」）；不输出 password、不输出 token 内容。|
 | **NFR-10** | Maintainability | 维持 ADR 0002 的 `ProfileKeychain` 编译期接口断言；不修改 ipatool 源码；新增逻辑放 `internal/`，第三方类型不泄漏到 CLI 层。|
@@ -388,7 +403,7 @@ ipa-manager
 |----|------------|------|------|
 | **R1** | ipatool 依赖 Apple 私有 API；Apple 改服务端会临时失效 | `auth login` 全部失败 | 项目级风险（AGENTS.md 已记录）；等 ipatool 跟进，通常数周内修复。|
 | **R2** | Apple ID 自动化登录有理论风控风险 | 账号可能被 Apple 标记 | 个人小流量使用风险低（AGENTS.md 已记录）；文档建议只用可接受风险的账号。|
-| **R3** | 同 profile 并发登录（多终端窗口同时操作同一 ID）| keychain/cookie jar 写竞争，状态损坏 | **v1 不做互斥**，作为已知限制；文档建议用户避免。|
+| **R3** | 同 profile 并发操作（多终端窗口同时 `login` / `logout` / `remove` 同一 ID）| keychain/cookie jar/config 写竞争 → 状态损坏、丢失或不可重复 | **v1 不实现互斥锁**，作为已知限制：该场景下的行为**未定义**，不在测试覆盖范围内。缓解措施：(1) ipa-manager README 和 `--help` 文本将明示此限制；(2) `accounts remove` 的级联失败语义由 NFR-04 兜底（其他写竞争不在覆盖范围内，行为未定义）。|
 | **R4** | Profile ID 派生冲突（不同 email → 同 ID）| 第二次 login 刷新第一个 profile 而非新建 | §4.1 已限制为 lowercase + 非 `[a-z0-9_-]` → `_`；接受此限制，文档明示。|
 | **R5** | macOS Keychain 被锁 / 权限拒绝 | `auth login` 失败 | 错误透传 + 可读提示；不做自动解锁。|
 | **R6** | 2FA code 输错 | login 失败 | AC-06-2：直接失败退出；用户重新运行 `auth login`。v1 不做交互式 retry 循环（保持简单）。|
@@ -412,11 +427,11 @@ ipa-manager
 
 | ID | 度量（用户视角，技术无关）|
 |----|--------------------------|
-| **S1** | 用户能在 < 5 分钟内完成「登录 2 个账号 + 在它们之间切换 1 次」的端到端流程，无需查阅文档中除命令名以外的任何内部细节（profile ID、keychain 路径、config 格式等）。|
+| **S1** | 用户能在 < 5 分钟内完成「登录 2 个账号 + 在它们之间切换 1 次」的端到端流程，无需了解 ipa-manager 的内部细节（keychain 路径、config 文件格式、派生算法规则等）；profile ID 等用户必需信息可通过 `accounts list` 直接获得。|
 | **S2** | `accounts remove` 后，通过任何 ipa-manager 命令都无法再访问到该 profile 的任何痕迹（不出现在 `list`，`use` 拒绝，`auth logout` 拒绝）。|
 | **S3** | `auth logout` 后再 `auth login` 同 email，profile 元数据（name 等）保留不变，凭据刷新成功。|
 | **S4** | 三个本地命令（`list` / `use` / `remove`）体感瞬时（< 500ms）。|
-| **S5** | 所有失败路径返回非零退出码 + 人可读错误 + 下一步建议（覆盖 AC-07-3）。|
+| **S5** | ipa-manager 自身产生的命令错误（含 AC-07-3 排除项之外的所有错误）返回非零退出码 + 人可读错误 + 下一步建议。|
 
 ---
 
@@ -432,13 +447,34 @@ ipa-manager
 | Q6: 范围 | 不调整 | §3 |
 | Logout 目标 | A — 默认 active，可显式覆盖 | AC-05-1, AC-05-2 |
 
+### Spock Review Fixes（首轮评审 NOT-PASS 后的修正）
+
+| Finding | 严重度 | 修正 |
+|---------|-------|------|
+| REQ-B1: AC-01-1 与 AC-01-4 不一致（count 断言冲突）| BLOCKER | AC-01-1 改为不断言 active / 不限制其他 profile 存在与否；active 行为由 AC-01-3/01-4 分别覆盖 |
+| REQ-B2: AC-02-4 不可观察（"无网络"无法从 timing 证明）| BLOCKER | 重写为「Apple API 不可达时 `use` 仍 exit 0 且切换成功」+ 引用 NFR-01 作为旁证 |
+| REQ-B3: AC-04-6 不可观察（无法证明"凭据未复用"）| BLOCKER | 拆为 AC-04-6（删除后 ID 行为如同从未存在）+ AC-04-7（再 login 走全新流程，仅断言外部行为）|
+| REQ-M1: active→logged-out 陷阱状态未定义契约 | MAJOR | 新增 AC-05-7，明确该状态合法 + 后续 mission 的契约 |
+| REQ-M2: 并发限制行为未定义 | MAJOR | R3 强化：明确「未定义 + 不在测试覆盖」+ README/--help 文档要求 |
+| REQ-M3: AC-07-3 范围过宽（含 Ctrl-C / panic）| MAJOR | 缩窄为「ipa-manager 自身的命令错误」+ 显式排除项 |
+| REQ-m1: NFR-02 测量边界不清 | MINOR | 明确测量边界：从 ipatool Login 返回到 CLI 退出 |
+| REQ-m2: S1 措辞（"无需知 profile ID" 与 use 参数矛盾）| MINOR | 改为「profile ID 可通过 `accounts list` 获得」|
+
+### Spock 复审修正（GO-WITH-FIXES 第二轮）
+
+| Finding | 严重度 | 修正 |
+|---------|-------|------|
+| 复审回归：AC-04-4（确认拒绝 = exit 0）与 AC-07-3（把"确认拒绝"列为错误）冲突 | MAJOR（回归）| AC-07-3 范围排除项新增「用户在确认提示中选 no —— 合法成功取消（AC-04-4）」|
+| AC-05-7 标题与正文不符（标题说"报错"但当前 scope 命令 exit 0）| MINOR | 标题改为「active 可合法指向 logged-out profile（状态契约）」|
+| R3 对 NFR-04 的引用过度泛化（NFR-04 只覆盖 remove 级联）| MINOR | R3 缓解措施改为「`accounts remove` 的级联失败由 NFR-04 兜底；其他写竞争不在覆盖范围」|
+
 ---
 
 ## 12. Sufficiency Check（design 阶段能否不猜谜地推进？）
 
 - [x] **意图清晰**：多账号添加/切换闭环，§1 已述。
 - [x] **歧义已解**：所有 7 个高影响问题已闭环（§11）。
-- [x] **每个 US 至少 1 个 AC**：US-01→4 AC，US-02→4 AC，US-03→3 AC，US-04→6 AC，US-05→6 AC，US-06→3 AC，US-07→3 AC。
+- [x] **每个 US 至少 1 个 AC**：US-01→4 AC，US-02→4 AC，US-03→3 AC，US-04→7 AC，US-05→7 AC，US-06→3 AC，US-07→3 AC（共 31 AC）。
 - [x] **AC 可观察**：全部 Then 子句验证 CLI 输出/退出码/通过其他命令可见的状态，无内部实现耦合。
 - [x] **NFR 可度量**：每个 NFR 有具体度量（毫秒、是否写盘、退出码等）。
 - [x] **范围明确**：In/Out/Non-goals 三段清晰。
