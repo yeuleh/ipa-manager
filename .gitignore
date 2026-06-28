@@ -1,0 +1,17 @@
+# --- Go ---
+/bin/
+*.test
+*.out
+coverage.txt
+
+# --- macOS ---
+.DS_Store
+
+# --- Editor / IDE ---
+.idea/
+.vscode/
+*.swp
+
+# --- MindTrek / agent workspace ---
+# Local agent scratch (never commit secrets or local-only state)
+.opencode/local/
