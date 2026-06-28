@@ -2,7 +2,7 @@
 
 项目级协作约定与上下文，供 AI 代理（及人类协作者）快速理解本项目。
 
-<!-- mindtrek-bootstrap:start stage="researched" -->
+<!-- mindtrek-bootstrap:start stage="config-confirmed" -->
 ## 项目：ipa-manager
 
 **是什么**：macOS CLI 工具，管理多个 Apple 账号下 iOS 应用（`.ipa`）的全生命周期——登录/切换账号、按账号隔离下载与本地管理、推送到 iOS 设备安装/更新。
@@ -26,7 +26,7 @@
 - **Stage 1 — 需求讨论**：✅ 完成。详见 `docs/bootstrap/requirements.md`
 - **Stage 2 — 技术选型**：✅ 完成（组合 A：精简 CLI）。详见 `docs/bootstrap/tech-stack.md`
 - Stage 3 — 研究：⏳ 待开始 → ✅ 完成。详见 `docs/bootstrap/research.md`（含 ipatool 多账号 keychain 模式、go-ios 集成 API、huh/cobra/lipgloss 选型、目录结构）
-- Stage 4 — 配置方案：⏳ 待开始
+- Stage 4 — 配置方案：⏳ 待开始 → ✅ 完成（经 Spock 评审 GO-WITH-FIXES，已纳入全部修正）。详见 `docs/bootstrap/config-plan.md`
 - Stage 5 — 脚手架：⏳ 待开始
 - Stage 6 — 工作区初始化：⏳ 待开始
 
