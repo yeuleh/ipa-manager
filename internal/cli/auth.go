@@ -180,9 +180,10 @@ func authLogoutCmd(deps Deps) *cobra.Command {
 
 			// Do NOT touch metadata, do NOT change active (AC-05-1).
 			if len(errs) > 0 {
-				fmt.Fprintf(out, "Logged out '%s' with errors:\n", targetID)
+				errOut := cmd.ErrOrStderr()
+				fmt.Fprintf(errOut, "Logged out '%s' with errors:\n", targetID)
 				for _, e := range errs {
-					fmt.Fprintf(out, "  - %v\n", e)
+					fmt.Fprintf(errOut, "  - %v\n", e)
 				}
 				return fmt.Errorf("logout completed with %d error(s)", len(errs))
 			}

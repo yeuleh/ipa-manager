@@ -163,9 +163,10 @@ func accountsRemoveCmd(deps Deps) *cobra.Command {
 
 			// Report results (NFR-04: no silent partial success).
 			if len(errs) > 0 {
-				fmt.Fprintf(out, "Profile '%s' removed with %d error(s):\n", id, len(errs))
+				errOut := cmd.ErrOrStderr()
+				fmt.Fprintf(errOut, "Profile '%s' removed with %d error(s):\n", id, len(errs))
 				for _, e := range errs {
-					fmt.Fprintf(out, "  - %v\n", e)
+					fmt.Fprintf(errOut, "  - %v\n", e)
 				}
 				return fmt.Errorf("remove completed with %d error(s)", len(errs))
 			}

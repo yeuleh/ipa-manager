@@ -3,8 +3,10 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -83,6 +85,56 @@ func (m *mockStore) SetActive(id string) error {
 	m.setActiveCalled = id
 	return nil
 }
+// --- E2E-031 / NFR-01: local commands < 500ms (mock-based, measures CLI overhead) ---
+
+func TestLocalCommands_Performance_Under500ms(t *testing.T) {
+	// Create a store with 10 profiles (5 logged-in, 5 logged-out).
+	profiles := make([]account.Profile, 10)
+	credentials := make(map[string]bool)
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("user%d_test", i)
+		profiles[i] = account.Profile{ID: id, Email: fmt.Sprintf("user%d@test.com", i), Name: fmt.Sprintf("User%d", i)}
+		credentials[id] = i < 5 // first 5 logged-in
+	}
+	store := &mockStore{
+		profiles:    profiles,
+		activeID:    "user0_test",
+		credentials: credentials,
+	}
+	deps := Deps{
+		Store: store,
+		UI:    &mockPrompter{confirm: true},
+		AppStoreFactory: func(account.Profile) (ipaappstore.AppStore, error) {
+			return &mockAppStore{}, nil
+		},
+		ConfigRoot: "/tmp/test",
+	}
+
+	// Test list performance.
+	start := time.Now()
+	cmd := accountsListCmd(deps)
+	cmd.SetOut(&bytes.Buffer{})
+	_ = cmd.RunE(cmd, nil)
+	listElapsed := time.Since(start)
+	assert.Less(t, listElapsed, 500*time.Millisecond, "accounts list should be < 500ms (NFR-01)")
+
+	// Test use performance.
+	start = time.Now()
+	cmd = accountsUseCmd(deps)
+	cmd.SetOut(&bytes.Buffer{})
+	_ = cmd.RunE(cmd, []string{"user1_test"})
+	useElapsed := time.Since(start)
+	assert.Less(t, useElapsed, 500*time.Millisecond, "accounts use should be < 500ms (NFR-01)")
+
+	// Test remove performance (mock Revoke is instant).
+	start = time.Now()
+	cmd = accountsRemoveCmd(deps)
+	cmd.SetOut(&bytes.Buffer{})
+	_ = cmd.RunE(cmd, []string{"user1_test"})
+	removeElapsed := time.Since(start)
+	assert.Less(t, removeElapsed, 500*time.Millisecond, "accounts remove should be < 500ms (NFR-01)")
+}
+
 func (m *mockStore) ClearActive() error { return nil }
 
 // =============================================================================
@@ -98,6 +150,17 @@ func helperRunRemoveCmd(t *testing.T, deps Deps, args ...string) (string, error)
 	cmd.SetOut(&buf)
 	err := cmd.RunE(cmd, args)
 	return buf.String(), err
+}
+
+// helperRunRemoveCmdWithErr captures both stdout and stderr (for cascade error tests).
+func helperRunRemoveCmdWithErr(t *testing.T, deps Deps, args ...string) (string, string, error) {
+	t.Helper()
+	cmd := accountsRemoveCmd(deps)
+	var outBuf, errBuf bytes.Buffer
+	cmd.SetOut(&outBuf)
+	cmd.SetErr(&errBuf)
+	err := cmd.RunE(cmd, args)
+	return outBuf.String(), errBuf.String(), err
 }
 
 func helperMakeRemoveDeps(store *mockStore, prompter *mockPrompter, mockAS *mockAppStore) Deps {
@@ -240,10 +303,10 @@ func TestAccountsRemove_RevokeFailure_ReportsError(t *testing.T) {
 	mockAS := &mockAppStore{revokeErr: revokeErr}
 	deps := helperMakeRemoveDeps(store, prompter, mockAS)
 
-	output, err := helperRunRemoveCmd(t, deps, "alice_test")
+	_, stderr, err := helperRunRemoveCmdWithErr(t, deps, "alice_test")
 	require.Error(t, err)
-	assert.Contains(t, output, "error")
-	assert.Contains(t, output, "keychain locked")
+	assert.Contains(t, stderr, "error")
+	assert.Contains(t, stderr, "keychain locked")
 	// Metadata removal still happens (best-effort cascade)
 	assert.Equal(t, "alice_test", store.removedID, "metadata removal should proceed despite Revoke failure")
 }
@@ -266,9 +329,9 @@ func TestAccountsRemove_FactoryFailure_ReportsError(t *testing.T) {
 		ConfigRoot: "/tmp/test",
 	}
 
-	output, err := helperRunRemoveCmd(t, deps, "alice_test")
+	_, stderr, err := helperRunRemoveCmdWithErr(t, deps, "alice_test")
 	require.Error(t, err)
-	assert.Contains(t, output, "keyring", "factory error should appear in output")
+	assert.Contains(t, stderr, "keyring", "factory error should appear in stderr")
 }
 
 // helperRunListCmd creates an accountsListCmd with the given mock Store,
