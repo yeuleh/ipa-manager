@@ -212,6 +212,37 @@ func TestAuthLogin_RefreshExisting_UpdatesInPlace(t *testing.T) {
 }
 
 // =============================================================================
+// E2E-018 / AC-04-7: After remove, same-email login is FRESH (not refresh)
+// =============================================================================
+
+func TestAuthLogin_AfterRemove_FreshLogin(t *testing.T) {
+	// Start: bob existed but was removed. Store is empty (no profiles, no active).
+	store := &mockStore{credentials: map[string]bool{}}
+	prompter := &mockPrompter{
+		email:    "bob@example.com",
+		password: "bob-pass",
+	}
+	mockAS := &mockAppStore{
+		endpoint:     "https://auth.example.com",
+		loginResults: []appstore.LoginResult{{Name: "Bob New", Email: "bob@example.com", StoreFront: "143441"}},
+		loginErrors:  []error{nil},
+	}
+	deps := helperMakeLoginDeps(store, prompter, mockAS)
+
+	_, err := helperRunLoginCmd(t, deps)
+	require.NoError(t, err)
+
+	// AC-04-7: profile is created fresh (Upsert called with correct ID)
+	require.NotNil(t, store.upserted)
+	assert.Equal(t, "bob_example_com", store.upserted.ID)
+	assert.Equal(t, "Bob New", store.upserted.Name)
+
+	// AC-01-3: since this is the first profile (active was ""), auto-active
+	assert.Equal(t, "bob_example_com", store.setActiveCalled,
+		"first profile after remove should auto-active (fresh, not refresh)")
+}
+
+// =============================================================================
 // E2E-026 / AC-06-2: Wrong 2FA code
 // =============================================================================
 
@@ -506,9 +537,14 @@ func TestAuthLogout_PreservesMetadata(t *testing.T) {
 
 	_, err := helperRunLogoutCmd(t, deps, "alice_test")
 	require.NoError(t, err)
-	assert.Equal(t, "", store.removedID)
+	assert.Equal(t, "", store.removedID, "Remove should NOT be called")
+
+	// AC-05-6: metadata preserved with name/email unchanged (Spok validate finding).
 	profiles, _ := store.List()
-	assert.Len(t, profiles, 1)
+	require.Len(t, profiles, 1)
+	assert.Equal(t, "alice_test", profiles[0].ID)
+	assert.Equal(t, "alice@test.com", profiles[0].Email, "email should be unchanged")
+	assert.Equal(t, "Alice", profiles[0].Name, "name should be unchanged")
 }
 
 func TestAuthLogout_DoubleLogout_Idempotent(t *testing.T) {

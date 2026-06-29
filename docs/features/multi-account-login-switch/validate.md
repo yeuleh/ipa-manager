@@ -30,7 +30,7 @@
 | E2E-015  | edge      | TestAccountsRemove_RejectConfirm_NoChange                        | ✅ PASS    |
 | E2E-016  | failure   | TestAccountsRemove_NonExistent_FastFail                          | ✅ PASS    |
 | E2E-017  | regression| TestAccountsRemove_AfterRemove_IDGone                            | ✅ PASS    |
-| E2E-018  | regression| TestAuthLogin_RefreshExisting_UpdatesInPlace（同 mechanics）      | ✅ PASS    |
+| E2E-018  | regression| TestAuthLogin_AfterRemove_FreshLogin（Spok validate 修正：独立测试） | ✅ PASS    |
 | E2E-019  | happy     | TestAuthLogout_DefaultActive                                     | ✅ PASS    |
 | E2E-020  | happy     | TestAuthLogout_ExplicitProfile                                   | ✅ PASS    |
 | E2E-021  | failure   | TestAuthLogout_NonExistent_ErrorWithHint                         | ✅ PASS    |
@@ -97,7 +97,7 @@
 | AC-04-4 | 拒绝确认不删除             | TestAccountsRemove_RejectConfirm_NoChange               | ✅   |
 | AC-04-5 | 不存在快速失败             | TestAccountsRemove_NonExistent_FastFail                 | ✅   |
 | AC-04-6 | ID 行为如同从未存在        | TestAccountsRemove_AfterRemove_IDGone                   | ✅   |
-| AC-04-7 | 再 login 走全新流程        | TestAuthLogin_RefreshExisting_UpdatesInPlace            | ✅   |
+| AC-04-7 | 再 login 走全新流程        | TestAuthLogin_AfterRemove_FreshLogin（Spok validate 修正）| ✅   |
 
 ### US-05 — 登出
 
@@ -108,7 +108,7 @@
 | AC-05-3 | 不存在报错                 | TestAuthLogout_NonExistent_ErrorWithHint               | ✅   |
 | AC-05-4 | 无 active 报错             | TestAuthLogout_NoActive_ErrorWithHint                   | ✅   |
 | AC-05-5 | 幂等                       | TestAuthLogout_AlreadyLoggedOut_Idempotent              | ✅   |
-| AC-05-6 | metadata 保留              | TestAuthLogout_PreservesMetadata                        | ✅   |
+| AC-05-6 | metadata 保留              | TestAuthLogout_PreservesMetadata（Spok validate 加强：验证 name/email 不变）| ✅   |
 | AC-05-7 | active→logged-out 契约     | TestAuthLogout_DoubleLogout_Idempotent                  | ✅   |
 
 ### US-06 — 2FA
@@ -197,4 +197,4 @@ Execution 阶段 Spock per-task reviews 记录的 Minor 项：
 | Minor findings             | 4 项全部 ACCEPT/DEFER，无需 fix                        |
 | Blocked tasks              | 无                                                     |
 | NFR compliance (10)        | 10/10 PASS                                             |
-| 总测试数                   | 68 tests，0 failures（fresh, -count=1）                 |
+| 总测试数                   | 69 tests，0 failures（fresh, -count=1）                 |
