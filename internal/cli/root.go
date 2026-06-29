@@ -8,9 +8,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Execute builds and runs the root command.
+// Execute builds and runs the root command with production dependencies.
 func Execute(version string) {
-	root := newRootCmd()
+	deps, err := newProductionDeps()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	root := newRootCmd(deps)
 	root.Version = version
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -18,7 +23,7 @@ func Execute(version string) {
 	}
 }
 
-func newRootCmd() *cobra.Command {
+func newRootCmd(deps Deps) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "ipa-manager",
 		Short: "Manage multiple Apple accounts' IPA downloads and device installs",
@@ -28,8 +33,8 @@ func newRootCmd() *cobra.Command {
 			"(via ipatool's keyring); device operations use go-ios.",
 	}
 	root.AddCommand(
-		authCmd(),
-		accountCmd(),
+		authCmd(deps),
+		accountCmd(deps),
 		appsCmd(),
 		devicesCmd(),
 		installCmd(),
