@@ -2,11 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	ipaappstore "github.com/majd/ipatool/v2/pkg/appstore"
 
 	"github.com/yeuleh/ipa-manager/internal/account"
 	"github.com/yeuleh/ipa-manager/internal/apperr"
@@ -61,6 +64,19 @@ func (m *mockStore) Upsert(p account.Profile) error {
 }
 func (m *mockStore) Remove(id string) error {
 	m.removedID = id
+	// Actually remove from profiles slice (enables AC-04-6 testing).
+	for i, p := range m.profiles {
+		if p.ID == id {
+			m.profiles = append(m.profiles[:i], m.profiles[i+1:]...)
+			break
+		}
+	}
+	// Simulate active-clearing invariant (matches real Store behavior, DD-04).
+	if m.activeID == id {
+		m.activeID = ""
+	}
+	// Remove credential tracking.
+	delete(m.credentials, id)
 	return nil
 }
 func (m *mockStore) SetActive(id string) error {
@@ -68,6 +84,192 @@ func (m *mockStore) SetActive(id string) error {
 	return nil
 }
 func (m *mockStore) ClearActive() error { return nil }
+
+// =============================================================================
+// T6: accounts remove tests
+// =============================================================================
+
+// helperRunRemoveCmd creates an accountsRemoveCmd with the given Deps, captures
+// output, runs the command with the given args, and returns output + error.
+func helperRunRemoveCmd(t *testing.T, deps Deps, args ...string) (string, error) {
+	t.Helper()
+	cmd := accountsRemoveCmd(deps)
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	err := cmd.RunE(cmd, args)
+	return buf.String(), err
+}
+
+func helperMakeRemoveDeps(store *mockStore, prompter *mockPrompter, mockAS *mockAppStore) Deps {
+	return Deps{
+		Store: store,
+		UI:    prompter,
+		AppStoreFactory: func(account.Profile) (ipaappstore.AppStore, error) {
+			return mockAS, nil
+		},
+		ConfigRoot: "/tmp/test-config",
+	}
+}
+
+// --- AC-04-1: remove existing with confirm ---
+
+func TestAccountsRemove_ConfirmRemove_Success(t *testing.T) {
+	store := &mockStore{
+		profiles:    []account.Profile{{ID: "bob_test", Email: "bob@test.com", Name: "Bob"}},
+		credentials: map[string]bool{"bob_test": true},
+	}
+	prompter := &mockPrompter{confirm: true}
+	mockAS := &mockAppStore{}
+	deps := helperMakeRemoveDeps(store, prompter, mockAS)
+
+	output, err := helperRunRemoveCmd(t, deps, "bob_test")
+	require.NoError(t, err)
+	assert.Contains(t, output, "removed")
+	assert.Equal(t, "bob_test", store.removedID, "Remove should be called with bob_test")
+	assert.True(t, mockAS.revokeCalled, "Revoke should be called")
+	assert.True(t, store.saved, "Save should be called")
+}
+
+// --- AC-04-2: remove non-active doesn't affect active ---
+
+func TestAccountsRemove_NonActive_KeepsActive(t *testing.T) {
+	store := &mockStore{
+		profiles: []account.Profile{
+			{ID: "alice_test", Email: "alice@test.com"},
+			{ID: "bob_test", Email: "bob@test.com"},
+		},
+		activeID:    "alice_test",
+		credentials: map[string]bool{"bob_test": true},
+	}
+	prompter := &mockPrompter{confirm: true}
+	mockAS := &mockAppStore{}
+	deps := helperMakeRemoveDeps(store, prompter, mockAS)
+
+	_, err := helperRunRemoveCmd(t, deps, "bob_test")
+	require.NoError(t, err)
+	assert.Equal(t, "alice_test", store.activeID, "active should remain alice")
+}
+
+// --- AC-04-3: remove active clears active ---
+
+func TestAccountsRemove_Active_ClearsActive(t *testing.T) {
+	store := &mockStore{
+		profiles: []account.Profile{
+			{ID: "alice_test", Email: "alice@test.com"},
+		},
+		activeID:    "alice_test",
+		credentials: map[string]bool{"alice_test": true},
+	}
+	prompter := &mockPrompter{confirm: true}
+	mockAS := &mockAppStore{}
+	deps := helperMakeRemoveDeps(store, prompter, mockAS)
+
+	_, err := helperRunRemoveCmd(t, deps, "alice_test")
+	require.NoError(t, err)
+	assert.Equal(t, "", store.activeID, "active should be cleared after removing active profile")
+}
+
+// --- AC-04-4: reject confirm → no change ---
+
+func TestAccountsRemove_RejectConfirm_NoChange(t *testing.T) {
+	store := &mockStore{
+		profiles:    []account.Profile{{ID: "alice_test", Email: "alice@test.com"}},
+		credentials: map[string]bool{"alice_test": true},
+	}
+	prompter := &mockPrompter{confirm: false} // user says "no"
+	mockAS := &mockAppStore{}
+	deps := helperMakeRemoveDeps(store, prompter, mockAS)
+
+	output, err := helperRunRemoveCmd(t, deps, "alice_test")
+	require.NoError(t, err, "rejection should exit 0")
+	assert.Contains(t, output, "Cancelled")
+	assert.Equal(t, "", store.removedID, "Remove should NOT be called")
+	assert.False(t, mockAS.revokeCalled, "Revoke should NOT be called")
+	assert.False(t, store.saved, "Save should NOT be called")
+}
+
+// --- AC-04-5 + AC-07-3: remove non-existent → fast fail, no confirm ---
+
+func TestAccountsRemove_NonExistent_FastFail(t *testing.T) {
+	store := &mockStore{credentials: map[string]bool{}}
+	prompter := &mockPrompter{confirm: true} // would confirm if asked
+	mockAS := &mockAppStore{}
+	deps := helperMakeRemoveDeps(store, prompter, mockAS)
+
+	_, err := helperRunRemoveCmd(t, deps, "ghost_test")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+	assert.Contains(t, err.Error(), "accounts list")
+	// AC-04-5: confirm NOT prompted
+	assert.False(t, prompter.confirmCalled, "Confirm should NOT be called for non-existent profile")
+	assert.False(t, mockAS.revokeCalled)
+}
+
+// --- AC-04-6: after remove, ID is truly gone from store ---
+
+func TestAccountsRemove_AfterRemove_IDGone(t *testing.T) {
+	store := &mockStore{
+		profiles:    []account.Profile{{ID: "bob_test", Email: "bob@test.com"}},
+		credentials: map[string]bool{"bob_test": true},
+	}
+	prompter := &mockPrompter{confirm: true}
+	mockAS := &mockAppStore{}
+	deps := helperMakeRemoveDeps(store, prompter, mockAS)
+
+	_, err := helperRunRemoveCmd(t, deps, "bob_test")
+	require.NoError(t, err)
+
+	// AC-04-6: profile is gone from List.
+	profiles, _ := store.List()
+	assert.Empty(t, profiles, "no profiles should remain after remove")
+
+	// AC-04-6: Get returns not-found error.
+	_, err = store.Get("bob_test")
+	assert.Error(t, err, "Get should fail for removed profile")
+}
+
+// --- E2E-033 / NFR-04: cascade failure reporting (Revoke fails) ---
+
+func TestAccountsRemove_RevokeFailure_ReportsError(t *testing.T) {
+	store := &mockStore{
+		profiles:    []account.Profile{{ID: "alice_test", Email: "alice@test.com"}},
+		credentials: map[string]bool{"alice_test": true},
+	}
+	prompter := &mockPrompter{confirm: true}
+	revokeErr := errors.New("keychain locked")
+	mockAS := &mockAppStore{revokeErr: revokeErr}
+	deps := helperMakeRemoveDeps(store, prompter, mockAS)
+
+	output, err := helperRunRemoveCmd(t, deps, "alice_test")
+	require.Error(t, err)
+	assert.Contains(t, output, "error")
+	assert.Contains(t, output, "keychain locked")
+	// Metadata removal still happens (best-effort cascade)
+	assert.Equal(t, "alice_test", store.removedID, "metadata removal should proceed despite Revoke failure")
+}
+
+// --- Factory failure reported ---
+
+func TestAccountsRemove_FactoryFailure_ReportsError(t *testing.T) {
+	store := &mockStore{
+		profiles:    []account.Profile{{ID: "alice_test", Email: "alice@test.com"}},
+		credentials: map[string]bool{"alice_test": true},
+	}
+	prompter := &mockPrompter{confirm: true}
+	factoryErr := errors.New("keyring unavailable")
+	deps := Deps{
+		Store: store,
+		UI:    prompter,
+		AppStoreFactory: func(account.Profile) (ipaappstore.AppStore, error) {
+			return nil, factoryErr
+		},
+		ConfigRoot: "/tmp/test",
+	}
+
+	output, err := helperRunRemoveCmd(t, deps, "alice_test")
+	require.Error(t, err)
+	assert.Contains(t, output, "keyring", "factory error should appear in output")
+}
 
 // helperRunListCmd creates an accountsListCmd with the given mock Store,
 // captures stdout, runs the command, and returns the output + error.

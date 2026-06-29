@@ -22,19 +22,23 @@ import (
 
 // mockPrompter implements ui.Prompter with configurable return values.
 type mockPrompter struct {
-	email       string
-	password    string
-	authCode    string
-	confirm     bool
-	emailErr    error
-	passwordErr error
-	authCodeErr error
+	email         string
+	password      string
+	authCode      string
+	confirm       bool
+	emailErr      error
+	passwordErr   error
+	authCodeErr   error
+	confirmCalled bool
 }
 
-func (m *mockPrompter) InputEmail() (string, error)                              { return m.email, m.emailErr }
-func (m *mockPrompter) InputPassword() (string, error)                           { return m.password, m.passwordErr }
-func (m *mockPrompter) InputAuthCode() (string, error)                           { return m.authCode, m.authCodeErr }
-func (m *mockPrompter) Confirm(string) (bool, error)                             { return m.confirm, nil }
+func (m *mockPrompter) InputEmail() (string, error) { return m.email, m.emailErr }
+func (m *mockPrompter) InputPassword() (string, error) { return m.password, m.passwordErr }
+func (m *mockPrompter) InputAuthCode() (string, error) { return m.authCode, m.authCodeErr }
+func (m *mockPrompter) Confirm(string) (bool, error) {
+	m.confirmCalled = true
+	return m.confirm, nil
+}
 func (m *mockPrompter) SelectProfile([]account.Profile, string) (string, error) { return "", nil }
 
 // mockAppStore implements ipaappstore.AppStore by embedding the interface

@@ -167,7 +167,7 @@ func authLogoutCmd(deps Deps) *cobra.Command {
 			if err != nil {
 				errs = append(errs, fmt.Errorf("construct appstore: %w", err))
 			} else {
-				if err := appStore.Revoke(); err != nil {
+				if err := appStore.Revoke(); err != nil && !isKeychainNotFound(err) {
 					errs = append(errs, fmt.Errorf("revoke keychain: %w", err))
 				}
 			}

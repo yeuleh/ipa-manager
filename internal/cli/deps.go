@@ -45,7 +45,7 @@ func newProductionDeps() (Deps, error) {
 	return Deps{
 		Store:           account.NewStore(paths.Config, baseKeychain),
 		AppStoreFactory: appstore.NewAppStoreFactory(paths.Root),
+		UI:              ui.NewPrompter(),
 		ConfigRoot:      paths.Root,
-		// UI is populated by a separate init once prompt.go is implemented (T4).
 	}, nil
 }
