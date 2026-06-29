@@ -51,7 +51,7 @@
 └─────────────────────────────────────────────────┘
 ```
 
-**Mock 注入点**：`appstore.NewProfileAppStore` 在测试中被替换为返回 mock AppStore 的版本（通过函数变量或接口注入）。
+**Mock 注入点**：通过 `Deps.AppStoreFactory` 注入（见 design.md DD-12）。测试构造 mock Deps，把 `AppStoreFactory` 替换为返回 mock `appstore.AppStore` 的函数；把 `Deps.Store` 替换为 mock `account.Store`；把 `Deps.UI` 替换为 mock `ui.Prompter`。CLI 命令通过 Deps 参数获取依赖，不依赖包级全局变量。
 
 ---
 
@@ -69,11 +69,13 @@
 
 ## 3. Validation Oracles
 
-| 维度 | 断言方式 |
-|------|---------|
-| **退出码** | `exit code == 0` 或 `!= 0`，按 AC 指定 |
-| **stdout** | 包含特定子串（如 profile ID、email、"Logged in"）|
-| **stderr** | 包含错误描述 + 下一步建议（AC-07-3 范围内）|
+> **Oracle 层次说明（SPK-m2 修正）**：requirements.md §6 的可观察性约定针对的是**用户验收契约**——用户只通过 CLI 输出/退出码/跨命令行为判断 pass/fail。本文档的 E2E 用例在满足用户验收契约的基础上，**额外**通过 mock keychain / config.json 内部状态做**集成层断言**，以增强测试的诊断能力（失败时能快速定位是哪一层出错）。这两层不冲突：内部断言是测试增强，不是验收契约；若实现换了存储后端（如 keychain → file），用户验收契约仍不变，但集成断言需相应调整。
+
+| 维度 | 断言方式 | 层次 |
+|------|---------|------|
+| **退出码** | `exit code == 0` 或 `!= 0`，按 AC 指定 | 用户验收 |
+| **stdout** | 包含特定子串（如 profile ID、email、"Logged in"）| 用户验收 |
+| **stderr** | 包含错误描述 + 下一步建议（AC-07-3 范围内）| 用户验收 |
 | **config.json 状态** | 反序列化后检查 `active_profile_id` 和 `profiles[]` 字段 |
 | **keychain 状态** | mock keychain 的 map 中是否存在 key `profiles/<id>/account` |
 | **跨命令一致性** | 操作后运行 `accounts list` / `accounts use` 验证状态 |
@@ -159,15 +161,17 @@
   - active 未变
 - **Pass/Fail**: 拒绝 + 错误提示 = pass
 
-### E2E-008 — `accounts use` 是本地操作（AC-02-4, NFR-01）
+### E2E-008 — `accounts use` 不构造 AppStore（AC-02-4, NFR-01）
 
 - **Type**: NFR
-- **Given**: `alice_example_com` logged-in；mock AppStore 的 `Bag()` 被配置为返回 error（模拟 Apple API 不可达）。
+- **Given**: `alice_example_com` logged-in；Deps 的 `AppStoreFactory` 被替换为一个**被调用即 panic** 的 mock（`func(p account.Profile) (appstore.AppStore, error) { panic("AppStoreFactory must not be called by accounts use") }`）。
 - **When**: 运行 `accounts use alice_example_com`。
 - **Then**:
-  - exit 0（不受 Apple API 不可达影响）
+  - exit 0
   - active 已切换
-- **Pass/Fail**: `use` 不依赖网络 = pass
+  - **无 panic 发生**（验证 `accounts use` 代码路径完全不构造 AppStore，更不会触达网络）
+- **Pass/Fail**: 无 panic + 成功切换 = pass
+- **注**（SPK-M7 修正）：原 Given（mock Bag 返回 error）是 vacuous 的——`accounts use` 根本不调 Bag，所以 mock Bag 的行为无关。改为"factory panic if called"能真正验证代码路径不构造 AppStore。
 
 ### E2E-009 — `accounts list` 空列表（AC-03-1）
 
@@ -566,6 +570,23 @@
 | US-07 | E2E-006, 007, 016, 021, 022, 028, 029, 030 |
 
 **无遗漏**：全部 7 个 US 均有 E2E 覆盖。
+
+### NFR 完整覆盖矩阵（SPK-M8 修正）
+
+| NFR | 度量 | 验证方式 | 覆盖用例 |
+|-----|------|---------|---------|
+| **NFR-01** | 本地命令 < 500ms | E2E-031（10 profiles wall clock）+ E2E-008（不构造 AppStore）| E2E-008, E2E-031 |
+| **NFR-02** | login CLI 自身开销 < 1s（不含 Apple 往返）| 单元测试：mock AppStore（瞬时返回），测量从 Login 返回到进程退出的 wall clock | 单元（新增）|
+| **NFR-03** | logout 幂等；remove 非幂等 | E2E-023（logout 已 logged-out）+ E2E-016/017（remove 不存在报错）| E2E-016, E2E-017, E2E-023 |
+| **NFR-04** | remove 级联不静默部分成功 | E2E-033（Revoke 失败 → 报告）| E2E-033 |
+| **NFR-05** | password 不进 config.json / 不进日志 | 静态断言：grep 测试输出无 password 值 + grep `config.json` 序列化后无 password 字段（Profile struct 无 password 字段，编译期保证）| E2E-001（断言 config.json 无 password）+ 代码审查 |
+| **NFR-06** | profile 元数据明文；无遥测 | 静态：无网络上报代码（grep `http.Post\|http.Get` 排除 ipatool 内部）；config.json 含 email 是设计意图 | 代码审查 |
+| **NFR-07** | huh 统一 TUI；错误含下一步建议 | E2E-030（三场景含建议）| E2E-030 |
+| **NFR-08** | 仅 macOS；Go ≥ 1.26 | 构建约束：`//go:build darwin` 在 keychain 相关文件 + go.mod `go 1.26` | 编译验证（go build）|
+| **NFR-09** | login 阶段进度输出；不输出 password/token | E2E-001/025 断言 stdout 含进度关键词 + 不含 password 值 | E2E-001, E2E-025 |
+| **NFR-10** | ProfileKeychain 编译期断言；不改 ipatool；第三方类型不泄漏 CLI | 静态：`var _ ipakeychain.Keychain = ProfileKeychain{}` 已存在；grep CLI 层无 ipatool 类型引用 | 编译验证 + 代码审查 |
+
+**无遗漏**：全部 10 个 NFR 有验证方式（自动化 / 静态 / 代码审查）。
 
 ---
 
