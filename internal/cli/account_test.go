@@ -11,10 +11,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	ipaappstore "github.com/majd/ipatool/v2/pkg/appstore"
-
 	"github.com/yeuleh/ipa-manager/internal/account"
 	"github.com/yeuleh/ipa-manager/internal/apperr"
+	"github.com/yeuleh/ipa-manager/internal/appstore"
 )
 
 // mockStore is a test double for account.Store with configurable state.
@@ -104,7 +103,7 @@ func TestLocalCommands_Performance_Under500ms(t *testing.T) {
 	deps := Deps{
 		Store: store,
 		UI:    &mockPrompter{confirm: true},
-		AppStoreFactory: func(account.Profile) (ipaappstore.AppStore, error) {
+		AppStoreFactory: func(account.Profile) (appstore.ProfileAppStore, error) {
 			return &mockAppStore{}, nil
 		},
 		ConfigRoot: "/tmp/test",
@@ -167,7 +166,7 @@ func helperMakeRemoveDeps(store *mockStore, prompter *mockPrompter, mockAS *mock
 	return Deps{
 		Store: store,
 		UI:    prompter,
-		AppStoreFactory: func(account.Profile) (ipaappstore.AppStore, error) {
+		AppStoreFactory: func(account.Profile) (appstore.ProfileAppStore, error) {
 			return mockAS, nil
 		},
 		ConfigRoot: "/tmp/test-config",
@@ -323,7 +322,7 @@ func TestAccountsRemove_FactoryFailure_ReportsError(t *testing.T) {
 	deps := Deps{
 		Store: store,
 		UI:    prompter,
-		AppStoreFactory: func(account.Profile) (ipaappstore.AppStore, error) {
+		AppStoreFactory: func(account.Profile) (appstore.ProfileAppStore, error) {
 			return nil, factoryErr
 		},
 		ConfigRoot: "/tmp/test",

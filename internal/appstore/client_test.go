@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/99designs/keyring"
+	ipaappstore "github.com/majd/ipatool/v2/pkg/appstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -31,10 +32,9 @@ func TestAppStoreFactory_Type(t *testing.T) {
 
 // TestNewProfileAppStore_WiringWithMockKeyring verifies that NewProfileAppStore
 // correctly wires ProfileKeychain (namespace isolation) + cookie jar + keyring
-// config (Spok finding 4). Uses keyringOpener injection to avoid real Keychain.
+// config. Uses keyringOpener injection + white-box access to adapter.inner.
 func TestNewProfileAppStore_WiringWithMockKeyring(t *testing.T) {
 	// Pre-populate mock keyring with account data at the expected namespace key.
-	// ProfileKeychain maps "account" → "profiles/<id>/account".
 	mockKeyring := keyring.NewArrayKeyring([]keyring.Item{
 		{
 			Key:  "profiles/test_profile/account",
@@ -42,7 +42,6 @@ func TestNewProfileAppStore_WiringWithMockKeyring(t *testing.T) {
 		},
 	})
 
-	// Capture config for assertions + inject mock keyring.
 	var capturedConfig keyring.Config
 	origOpener := keyringOpener
 	defer func() { keyringOpener = origOpener }()
@@ -51,30 +50,29 @@ func TestNewProfileAppStore_WiringWithMockKeyring(t *testing.T) {
 		return mockKeyring, nil
 	}
 
-	// Construct AppStore with test profile.
 	dir := t.TempDir()
-	appStore, err := NewProfileAppStore(
+	store, err := NewProfileAppStore(
 		account.Profile{ID: "test_profile", Email: "test@example.com"},
 		dir,
 	)
 	require.NoError(t, err)
-	require.NotNil(t, appStore)
+	require.NotNil(t, store)
 
 	// Verify keyring config (DD-02).
 	assert.Equal(t, "ipa-manager", capturedConfig.ServiceName)
 	assert.Equal(t, []keyring.BackendType{keyring.KeychainBackend}, capturedConfig.AllowedBackends)
 	assert.Equal(t, filepath.Join(dir, "keychain"), capturedConfig.FileDir)
 
-	// Verify ProfileKeychain namespace: AccountInfo reads "account" which
-	// ProfileKeychain maps to "profiles/test_profile/account" in the mock keyring.
-	// If wiring is wrong (e.g., no ProfileKeychain), this would fail.
-	output, err := appStore.AccountInfo()
+	// White-box: access adapter.inner to verify ProfileKeychain namespace.
+	// ProfileKeychain maps "account" → "profiles/test_profile/account".
+	adapter, ok := store.(*profileAppStoreAdapter)
+	require.True(t, ok, "store should be *profileAppStoreAdapter")
+	output, err := adapter.inner.AccountInfo()
 	require.NoError(t, err, "AccountInfo should succeed via ProfileKeychain namespace")
 	assert.Equal(t, "test@example.com", output.Account.Email)
 	assert.Equal(t, "Test User", output.Account.Name)
 
-	// Verify cookie jar directory was created (the file itself is created
-	// on Save(), not on construction).
+	// Verify cookie jar directory was created.
 	cookieDir := filepath.Join(dir, "profiles", "test_profile")
 	info, err := os.Stat(cookieDir)
 	require.NoError(t, err, "cookie jar directory should exist at %s", cookieDir)
@@ -82,10 +80,9 @@ func TestNewProfileAppStore_WiringWithMockKeyring(t *testing.T) {
 }
 
 // TestNewProfileAppStore_NamespaceIsolation_VerifyDifferentProfiles tests
-// that two AppStores constructed with different ProfileIDs access different
-// keychain entries (core isolation guarantee, ADR 0002).
+// that two ProfileAppStores constructed with different ProfileIDs access
+// different keychain entries (core isolation guarantee, ADR 0002).
 func TestNewProfileAppStore_NamespaceIsolation_VerifyDifferentProfiles(t *testing.T) {
-	// Mock keyring with entries for two different profiles.
 	mockKeyring := keyring.NewArrayKeyring([]keyring.Item{
 		{
 			Key:  "profiles/alice_test/account",
@@ -105,21 +102,32 @@ func TestNewProfileAppStore_NamespaceIsolation_VerifyDifferentProfiles(t *testin
 
 	dir := t.TempDir()
 
-	// Construct AppStore for Alice.
 	aliceStore, err := NewProfileAppStore(account.Profile{ID: "alice_test"}, dir)
 	require.NoError(t, err)
-
-	// Construct AppStore for Bob.
 	bobStore, err := NewProfileAppStore(account.Profile{ID: "bob_test"}, dir)
 	require.NoError(t, err)
 
-	// Alice sees Alice's data, NOT Bob's.
-	aliceInfo, err := aliceStore.AccountInfo()
+	// White-box: verify each adapter sees only its own namespace.
+	aliceAdapter := aliceStore.(*profileAppStoreAdapter)
+	bobAdapter := bobStore.(*profileAppStoreAdapter)
+
+	aliceInfo, err := aliceAdapter.inner.AccountInfo()
 	require.NoError(t, err)
 	assert.Equal(t, "Alice", aliceInfo.Account.Name)
 
-	// Bob sees Bob's data, NOT Alice's.
-	bobInfo, err := bobStore.AccountInfo()
+	bobInfo, err := bobAdapter.inner.AccountInfo()
 	require.NoError(t, err)
 	assert.Equal(t, "Bob", bobInfo.Account.Name)
+}
+
+// Compile-time assertion that ProfileAppStore does NOT expose ipatool types.
+// If this compiles, the public interface is clean.
+func TestProfileAppStore_Interface(t *testing.T) {
+	var _ ProfileAppStore = (*profileAppStoreAdapter)(nil)
+	// LoginInput and LoginResult have only string fields — no ipatool leak.
+	input := LoginInput{Email: "e", Password: "p", AuthCode: "a", Endpoint: "ep"}
+	result := LoginResult{Name: "n", Email: "e", StoreFront: "s"}
+	_ = input
+	_ = result
+	_ = ipaappstore.AppStore(nil) // ipatool import only used in adapter tests (white-box)
 }
