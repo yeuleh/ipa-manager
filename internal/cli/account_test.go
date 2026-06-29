@@ -19,10 +19,19 @@ type mockStore struct {
 	credentials map[string]bool // profileID → has credentials
 	loadErr     error
 	listErr     error
+	getErr      error // override Get error (nil = use profiles lookup)
+	// Mutation tracking
+	setActiveCalled string // captured by SetActive
+	saved           bool   // set by Save
+	upserted        *account.Profile
+	removedID       string
 }
 
-func (m *mockStore) Load() error                  { return m.loadErr }
-func (m *mockStore) Save() error                  { return nil }
+func (m *mockStore) Load() error { return m.loadErr }
+func (m *mockStore) Save() error {
+	m.saved = true
+	return nil
+}
 func (m *mockStore) List() ([]account.Profile, error) {
 	if m.listErr != nil {
 		return nil, m.listErr
@@ -32,6 +41,9 @@ func (m *mockStore) List() ([]account.Profile, error) {
 	return result, nil
 }
 func (m *mockStore) Get(id string) (account.Profile, error) {
+	if m.getErr != nil {
+		return account.Profile{}, m.getErr
+	}
 	for _, p := range m.profiles {
 		if p.ID == id {
 			return p, nil
@@ -39,14 +51,23 @@ func (m *mockStore) Get(id string) (account.Profile, error) {
 	}
 	return account.Profile{}, apperr.ErrProfileNotFound
 }
-func (m *mockStore) GetActiveID() (string, error)  { return m.activeID, nil }
+func (m *mockStore) GetActiveID() (string, error) { return m.activeID, nil }
 func (m *mockStore) HasCredentials(id string) (bool, error) {
 	return m.credentials[id], nil
 }
-func (m *mockStore) Upsert(p account.Profile) error  { return nil }
-func (m *mockStore) Remove(id string) error           { return nil }
-func (m *mockStore) SetActive(id string) error        { return nil }
-func (m *mockStore) ClearActive() error               { return nil }
+func (m *mockStore) Upsert(p account.Profile) error {
+	m.upserted = &p
+	return nil
+}
+func (m *mockStore) Remove(id string) error {
+	m.removedID = id
+	return nil
+}
+func (m *mockStore) SetActive(id string) error {
+	m.setActiveCalled = id
+	return nil
+}
+func (m *mockStore) ClearActive() error { return nil }
 
 // helperRunListCmd creates an accountsListCmd with the given mock Store,
 // captures stdout, runs the command, and returns the output + error.
@@ -170,3 +191,105 @@ func assertError(msg string) error {
 type simpleError struct{ msg string }
 
 func (e *simpleError) Error() string { return e.msg }
+
+// =============================================================================
+// T3: accounts use tests
+// =============================================================================
+
+// helperRunUseCmd creates an accountsUseCmd with the given Deps, captures
+// output, runs the command with the given args, and returns output + error.
+func helperRunUseCmd(t *testing.T, deps Deps, args ...string) (string, error) {
+	t.Helper()
+	cmd := accountsUseCmd(deps)
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	err := cmd.RunE(cmd, args)
+	return buf.String(), err
+}
+
+// --- E2E-005: switch to logged-in profile (AC-02-1) ---
+
+func TestAccountsUse_LoggedInProfile_SwitchesActive(t *testing.T) {
+	store := &mockStore{
+		profiles: []account.Profile{
+			{ID: "alice_test", Email: "alice@test.com", Name: "Alice"},
+			{ID: "bob_test", Email: "bob@test.com", Name: "Bob"},
+		},
+		activeID: "alice_test",
+		credentials: map[string]bool{
+			"alice_test": true,
+			"bob_test":   true,
+		},
+	}
+	deps := Deps{Store: store}
+	output, err := helperRunUseCmd(t, deps, "bob_test")
+
+	require.NoError(t, err)
+	assert.Contains(t, output, "Active profile: bob_test")
+	assert.Equal(t, "bob_test", store.setActiveCalled, "SetActive should be called with bob_test")
+	assert.True(t, store.saved, "Save should be called")
+}
+
+// --- E2E-006: switch to non-existent profile (AC-02-2, AC-07-3) ---
+
+func TestAccountsUse_NonExistent_ErrorWithHint(t *testing.T) {
+	store := &mockStore{
+		credentials: map[string]bool{},
+	}
+	deps := Deps{Store: store}
+	_, err := helperRunUseCmd(t, deps, "ghost_test")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+	assert.Contains(t, err.Error(), "accounts list")
+	// Active should NOT be changed
+	assert.Equal(t, "", store.setActiveCalled)
+	assert.False(t, store.saved)
+}
+
+// --- E2E-007: switch to logged-out profile (AC-02-3, AC-07-3) ---
+
+func TestAccountsUse_LoggedOut_ErrorWithHint(t *testing.T) {
+	store := &mockStore{
+		profiles: []account.Profile{
+			{ID: "alice_test", Email: "alice@test.com", Name: "Alice"},
+		},
+		activeID: "bob_test",
+		credentials: map[string]bool{
+			"alice_test": false, // logged out
+		},
+	}
+	deps := Deps{Store: store}
+	_, err := helperRunUseCmd(t, deps, "alice_test")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no credentials")
+	assert.Contains(t, err.Error(), "auth login")
+	// Active should NOT be changed
+	assert.Equal(t, "", store.setActiveCalled)
+	assert.False(t, store.saved)
+}
+
+// --- E2E-008: use does NOT construct AppStore (AC-02-4, NFR-01) ---
+
+func TestAccountsUse_DoesNotConstructAppStore(t *testing.T) {
+	store := &mockStore{
+		profiles: []account.Profile{
+			{ID: "alice_test", Email: "alice@test.com", Name: "Alice"},
+		},
+		activeID: "",
+		credentials: map[string]bool{
+			"alice_test": true,
+		},
+	}
+	deps := Deps{
+		Store: store,
+		// AppStoreFactory intentionally nil — if use calls it, Go panics
+		// with nil pointer dereference, failing the test.
+	}
+	_, err := helperRunUseCmd(t, deps, "alice_test")
+
+	// If we get here without panic, the factory was never called.
+	require.NoError(t, err)
+	assert.Equal(t, "alice_test", store.setActiveCalled)
+}
