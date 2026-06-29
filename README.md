@@ -40,17 +40,23 @@ Or directly:
 go run ./cmd/ipa-manager --help
 ```
 
-### Common commands (once implemented)
+### Common commands
 
 ```bash
-ipa-manager auth login                  # log in an Apple ID (handles 2FA)
-ipa-manager accounts list               # list configured profiles
-ipa-manager accounts use <profile-id>   # switch active account
-ipa-manager apps search <term>          # search the App Store
-ipa-manager install download <bundle-id>   # download an IPA (per-account isolation)
-ipa-manager install push <ipa-path>     # install to a connected device
-ipa-manager doctor                      # environment health check
+ipa-manager auth login                  # log in an Apple ID (creates/refreshes profile, handles 2FA)
+ipa-manager auth logout [profile-id]    # revoke credentials (defaults to active profile)
+ipa-manager accounts list               # list configured profiles + status
+ipa-manager accounts use <profile-id>   # switch active account (strict: must be logged-in)
+ipa-manager accounts remove <id>        # delete profile + revoke credentials (with confirm)
 ```
+
+> Apps search, IPA download, device install, and doctor are future missions.
+
+### Known limitations
+
+- **No concurrent access**: running multiple ipa-manager commands simultaneously on the **same profile** (e.g., `auth login` and `accounts remove` in different terminal windows) may corrupt state. Behavior is **undefined** and not covered by tests. Run commands sequentially.
+- **No `accounts add` command**: use `auth login` to add new accounts.
+- **macOS only**: depends on macOS Keychain for credential storage.
 
 ### Development
 
