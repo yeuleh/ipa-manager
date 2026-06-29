@@ -7,7 +7,7 @@ import (
 
 	"github.com/99designs/keyring"
 	cookiejar "github.com/juju/persistent-cookiejar"
-	"github.com/majd/ipatool/v2/pkg/appstore"
+	ipaappstore "github.com/majd/ipatool/v2/pkg/appstore"
 	ipakeychain "github.com/majd/ipatool/v2/pkg/keychain"
 	"github.com/majd/ipatool/v2/pkg/util/machine"
 	"github.com/majd/ipatool/v2/pkg/util/operatingsystem"
@@ -17,23 +17,51 @@ import (
 
 // keyringOpener is the function used to open keyring backends.
 // Package-level variable allows test injection (Spok finding 4).
-// In production this calls keyring.Open; in tests it can return a mock keyring.
 var keyringOpener = keyring.Open
 
-// NewProfileAppStore constructs an ipatool AppStore scoped to a single account
+// profileAppStoreAdapter wraps ipatool's AppStore behind our ProfileAppStore
+// interface. This is the ONLY place in the codebase that imports ipatool's
+// appstore package for method calls. All ipatool API changes are confined here.
+type profileAppStoreAdapter struct {
+	inner ipaappstore.AppStore
+}
+
+func (a *profileAppStoreAdapter) GetAuthEndpoint() (string, error) {
+	bag, err := a.inner.Bag(ipaappstore.BagInput{})
+	if err != nil {
+		return "", err
+	}
+	return bag.AuthEndpoint, nil
+}
+
+func (a *profileAppStoreAdapter) Login(input LoginInput) (LoginResult, error) {
+	output, err := a.inner.Login(ipaappstore.LoginInput{
+		Email:    input.Email,
+		Password: input.Password,
+		AuthCode: input.AuthCode,
+		Endpoint: input.Endpoint,
+	})
+	if err != nil {
+		return LoginResult{}, err
+	}
+	return LoginResult{
+		Name:       output.Account.Name,
+		Email:      output.Account.Email,
+		StoreFront: output.Account.StoreFront,
+	}, nil
+}
+
+func (a *profileAppStoreAdapter) Revoke() error {
+	return a.inner.Revoke()
+}
+
+// NewProfileAppStore constructs a ProfileAppStore scoped to a single account
 // profile with isolated keychain namespace and cookie jar (design DD-01).
 //
-// Wiring steps (verified against ipatool v2.3.0 source):
-//  1. keyring.Open with ServiceName "ipa-manager" (isolated from raw ipatool)
-//  2. ipakeychain.New wraps keyring → ipatool keychain.Keychain
-//  3. account.ProfileKeychain wraps keychain → per-profile namespace
-//  4. cookiejar.New at per-profile cookie jar path
-//  5. operatingsystem.New + machine.New (shared singletons)
-//  6. appstore.NewAppStore with all deps injected
-func NewProfileAppStore(p account.Profile, configRoot string) (appstore.AppStore, error) {
+// ipatool types are confined to this function and the adapter struct.
+// Callers receive ProfileAppStore — our interface, not ipatool's.
+func NewProfileAppStore(p account.Profile, configRoot string) (ProfileAppStore, error) {
 	// 1. Keyring backend (macOS Keychain only for v1, design DD-02).
-	// FileDir and FilePasswordFunc are populated per DD-02 even though
-	// FileBackend is not in AllowedBackends — defensive completeness.
 	ring, err := keyringOpener(keyring.Config{
 		AllowedBackends: []keyring.BackendType{keyring.KeychainBackend},
 		ServiceName:     KeychainServiceName,
@@ -66,11 +94,13 @@ func NewProfileAppStore(p account.Profile, configRoot string) (appstore.AppStore
 	osys := operatingsystem.New()
 	mac := machine.New(machine.Args{OS: osys})
 
-	// 6. Construct AppStore with isolated deps.
-	return appstore.NewAppStore(appstore.Args{
+	// 6. Construct ipatool AppStore with isolated deps, wrap in adapter.
+	inner := ipaappstore.NewAppStore(ipaappstore.Args{
 		Keychain:        pkc,
 		CookieJar:       jar,
 		OperatingSystem: osys,
 		Machine:         mac,
-	}), nil
+	})
+
+	return &profileAppStoreAdapter{inner: inner}, nil
 }

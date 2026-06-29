@@ -7,8 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	ipaappstore "github.com/majd/ipatool/v2/pkg/appstore"
-
 	"github.com/yeuleh/ipa-manager/internal/account"
 	"github.com/yeuleh/ipa-manager/internal/appstore"
 )
@@ -47,25 +45,25 @@ func authLoginCmd(deps Deps) *cobra.Command {
 				return fmt.Errorf("failed to load config: %w", err)
 			}
 
-			// DD-05 step 5: construct per-profile AppStore.
+			// DD-05 step 5: construct per-profile ProfileAppStore (adapter isolates ipatool).
 			fmt.Fprintln(out, "Contacting Apple...")
 			appStore, err := deps.AppStoreFactory(account.Profile{ID: id, Email: email})
 			if err != nil {
 				return fmt.Errorf("failed to initialize appstore: %w", err)
 			}
 
-			// DD-05 step 6: get auth endpoint (must call Bag before Login).
-			bag, err := appStore.Bag(ipaappstore.BagInput{})
+			// DD-05 step 6: get auth endpoint.
+			endpoint, err := appStore.GetAuthEndpoint()
 			if err != nil {
 				return fmt.Errorf("failed to reach Apple: %w", err)
 			}
 
 			// DD-05 step 7: first login attempt (no auth code).
-			output, err := appStore.Login(ipaappstore.LoginInput{
+			result, err := appStore.Login(appstore.LoginInput{
 				Email:    email,
 				Password: password,
 				AuthCode: "",
-				Endpoint: bag.AuthEndpoint,
+				Endpoint: endpoint,
 			})
 
 			// DD-05 step 8: handle 2FA if required.
@@ -76,28 +74,25 @@ func authLoginCmd(deps Deps) *cobra.Command {
 					return fmt.Errorf("failed to read 2FA code: %w", err)
 				}
 				fmt.Fprintln(out, "Authenticating with 2FA...")
-				output, err = appStore.Login(ipaappstore.LoginInput{
+				result, err = appStore.Login(appstore.LoginInput{
 					Email:    email,
 					Password: password,
 					AuthCode: authCode,
-					Endpoint: bag.AuthEndpoint,
+					Endpoint: endpoint,
 				})
 				if err != nil {
-					// AC-06-2: wrong 2FA → fail with Apple's message + hint.
 					return fmt.Errorf("%w: verify your 2FA code and retry", err)
 				}
 			} else if err != nil {
-				// AC-07-1: wrong password or other auth failure.
 				return fmt.Errorf("%w: verify your credentials and retry", err)
 			}
 
 			// DD-05 step 9-10: persist profile metadata.
-			acc := output.Account
 			if err := deps.Store.Upsert(account.Profile{
 				ID:         id,
-				Name:       acc.Name,
-				Email:      acc.Email,
-				StoreFront: acc.StoreFront,
+				Name:       result.Name,
+				Email:      result.Email,
+				StoreFront: result.StoreFront,
 			}); err != nil {
 				return fmt.Errorf("failed to save profile: %w", err)
 			}
@@ -116,7 +111,7 @@ func authLoginCmd(deps Deps) *cobra.Command {
 			}
 
 			// DD-05 step 13: success (NFR-09: no password/token in output).
-			fmt.Fprintf(out, "Logged in: %s (%s), profile: %s\n", acc.Name, acc.Email, id)
+			fmt.Fprintf(out, "Logged in: %s (%s), profile: %s\n", result.Name, result.Email, id)
 			return nil
 		},
 	}
@@ -141,7 +136,6 @@ func authLogoutCmd(deps Deps) *cobra.Command {
 			} else {
 				activeID, _ := deps.Store.GetActiveID()
 				if activeID == "" {
-					// AC-05-4: no active profile → error + hint (AC-07-3).
 					return fmt.Errorf("no active profile. Run `accounts use <profile-id>` to set one.")
 				}
 				targetID = activeID

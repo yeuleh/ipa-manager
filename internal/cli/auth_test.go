@@ -10,9 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	ipaappstore "github.com/majd/ipatool/v2/pkg/appstore"
-
 	"github.com/yeuleh/ipa-manager/internal/account"
+	"github.com/yeuleh/ipa-manager/internal/appstore"
 	"github.com/yeuleh/ipa-manager/internal/ui"
 )
 
@@ -41,35 +40,34 @@ func (m *mockPrompter) Confirm(string) (bool, error) {
 }
 func (m *mockPrompter) SelectProfile([]account.Profile, string) (string, error) { return "", nil }
 
-// mockAppStore implements ipaappstore.AppStore by embedding the interface
-// (nil) and overriding only Bag, Login, and Revoke. Other methods panic if called.
+// mockAppStore implements appstore.ProfileAppStore with configurable behavior.
+// No ipatool types — pure our-own types (adapter isolation verified).
 type mockAppStore struct {
-	ipaappstore.AppStore // nil embed; non-overridden methods panic if called
-	bagOutput    ipaappstore.BagOutput
-	bagErr       error
-	loginOutputs []ipaappstore.LoginOutput
+	endpoint     string
+	endpointErr  error
+	loginResults []appstore.LoginResult
 	loginErrors  []error
 	loginCalls   int
 	revokeErr    error
 	revokeCalled bool
 }
 
-func (m *mockAppStore) Bag(ipaappstore.BagInput) (ipaappstore.BagOutput, error) {
-	return m.bagOutput, m.bagErr
+func (m *mockAppStore) GetAuthEndpoint() (string, error) {
+	return m.endpoint, m.endpointErr
 }
 
-func (m *mockAppStore) Login(ipaappstore.LoginInput) (ipaappstore.LoginOutput, error) {
+func (m *mockAppStore) Login(appstore.LoginInput) (appstore.LoginResult, error) {
 	idx := m.loginCalls
 	m.loginCalls++
-	var output ipaappstore.LoginOutput
+	var result appstore.LoginResult
 	var err error
-	if idx < len(m.loginOutputs) {
-		output = m.loginOutputs[idx]
+	if idx < len(m.loginResults) {
+		result = m.loginResults[idx]
 	}
 	if idx < len(m.loginErrors) {
 		err = m.loginErrors[idx]
 	}
-	return output, err
+	return result, err
 }
 
 func (m *mockAppStore) Revoke() error {
@@ -93,7 +91,7 @@ func helperMakeLoginDeps(store account.Store, prompter ui.Prompter, mockAS *mock
 	return Deps{
 		Store: store,
 		UI:    prompter,
-		AppStoreFactory: func(account.Profile) (ipaappstore.AppStore, error) {
+		AppStoreFactory: func(account.Profile) (appstore.ProfileAppStore, error) {
 			return mockAS, nil
 		},
 	}
@@ -111,37 +109,26 @@ func TestAuthLogin_NewProfile_2FA_AutoActive(t *testing.T) {
 		authCode: "123456",
 	}
 	mockAS := &mockAppStore{
-		bagOutput: ipaappstore.BagOutput{AuthEndpoint: "https://auth.example.com"},
-		loginOutputs: []ipaappstore.LoginOutput{
-			{}, // first call: ErrAuthCodeRequired (output discarded)
-			{Account: ipaappstore.Account{Name: "Alice", Email: "alice@example.com", StoreFront: "143441"}}, // second call: success
+		endpoint: "https://auth.example.com",
+		loginResults: []appstore.LoginResult{
+			{}, // first call: ErrAuthCodeRequired (result discarded)
+			{Name: "Alice", Email: "alice@example.com", StoreFront: "143441"},
 		},
-		loginErrors: []error{ipaappstore.ErrAuthCodeRequired, nil},
+		loginErrors: []error{appstore.ErrAuthCodeRequired, nil},
 	}
 	deps := helperMakeLoginDeps(store, prompter, mockAS)
 
 	output, err := helperRunLoginCmd(t, deps)
 	require.NoError(t, err)
 
-	// AC-01-1: profile created
 	assert.Contains(t, output, "Logged in")
 	assert.Contains(t, output, "Alice")
 	assert.NotNil(t, store.upserted)
 	assert.Equal(t, "alice_example_com", store.upserted.ID)
-
-	// AC-01-3: first profile auto-active
 	assert.Equal(t, "alice_example_com", store.setActiveCalled)
-
-	// AC-06-1: 2FA prompt shown
 	assert.Contains(t, output, "2FA")
-
-	// Saved
 	assert.True(t, store.saved)
-
-	// NFR-09: no password in output
 	assert.NotContains(t, output, "correct-password")
-
-	// Two login calls (first with empty AuthCode, second with code)
 	assert.Equal(t, 2, mockAS.loginCalls)
 }
 
@@ -154,23 +141,19 @@ func TestAuthLogin_No2FA_DirectSuccess(t *testing.T) {
 	prompter := &mockPrompter{
 		email:    "alice@example.com",
 		password: "correct",
-		authCode: "", // should not be used
 	}
 	mockAS := &mockAppStore{
-		bagOutput:    ipaappstore.BagOutput{AuthEndpoint: "https://auth.example.com"},
-		loginOutputs: []ipaappstore.LoginOutput{{Account: ipaappstore.Account{Name: "Alice", Email: "alice@example.com"}}},
-		loginErrors:  []error{nil}, // first call succeeds directly
+		endpoint:     "https://auth.example.com",
+		loginResults: []appstore.LoginResult{{Name: "Alice", Email: "alice@example.com"}},
+		loginErrors:  []error{nil},
 	}
 	deps := helperMakeLoginDeps(store, prompter, mockAS)
 
 	output, err := helperRunLoginCmd(t, deps)
 	require.NoError(t, err)
 
-	// AC-06-3: no 2FA prompt
 	assert.NotContains(t, output, "2FA")
 	assert.Contains(t, output, "Logged in")
-
-	// Only one login call (no retry)
 	assert.Equal(t, 1, mockAS.loginCalls)
 }
 
@@ -186,21 +169,16 @@ func TestAuthLogin_SecondProfile_DoesNotReplaceActive(t *testing.T) {
 		activeID:    "alice_example_com",
 		credentials: map[string]bool{"alice_example_com": true},
 	}
-	prompter := &mockPrompter{
-		email:    "bob@example.com",
-		password: "bob-pass",
-	}
+	prompter := &mockPrompter{email: "bob@example.com", password: "bob-pass"}
 	mockAS := &mockAppStore{
-		bagOutput:    ipaappstore.BagOutput{AuthEndpoint: "https://auth.example.com"},
-		loginOutputs: []ipaappstore.LoginOutput{{Account: ipaappstore.Account{Name: "Bob", Email: "bob@example.com"}}},
+		endpoint:     "https://auth.example.com",
+		loginResults: []appstore.LoginResult{{Name: "Bob", Email: "bob@example.com"}},
 		loginErrors:  []error{nil},
 	}
 	deps := helperMakeLoginDeps(store, prompter, mockAS)
 
 	_, err := helperRunLoginCmd(t, deps)
 	require.NoError(t, err)
-
-	// AC-01-4: active unchanged (still alice, not bob)
 	assert.Equal(t, "", store.setActiveCalled, "SetActive should NOT be called for second profile")
 }
 
@@ -216,13 +194,10 @@ func TestAuthLogin_RefreshExisting_UpdatesInPlace(t *testing.T) {
 		activeID:    "alice_example_com",
 		credentials: map[string]bool{"alice_example_com": true},
 	}
-	prompter := &mockPrompter{
-		email:    "alice@example.com", // same email → same derived ID → refresh
-		password: "new-pass",
-	}
+	prompter := &mockPrompter{email: "alice@example.com", password: "new-pass"}
 	mockAS := &mockAppStore{
-		bagOutput:    ipaappstore.BagOutput{AuthEndpoint: "https://auth.example.com"},
-		loginOutputs: []ipaappstore.LoginOutput{{Account: ipaappstore.Account{Name: "New Name", Email: "alice@example.com"}}},
+		endpoint:     "https://auth.example.com",
+		loginResults: []appstore.LoginResult{{Name: "New Name", Email: "alice@example.com"}},
 		loginErrors:  []error{nil},
 	}
 	deps := helperMakeLoginDeps(store, prompter, mockAS)
@@ -230,12 +205,9 @@ func TestAuthLogin_RefreshExisting_UpdatesInPlace(t *testing.T) {
 	_, err := helperRunLoginCmd(t, deps)
 	require.NoError(t, err)
 
-	// Upsert called with updated name
 	require.NotNil(t, store.upserted)
 	assert.Equal(t, "alice_example_com", store.upserted.ID)
 	assert.Equal(t, "New Name", store.upserted.Name)
-
-	// Active unchanged (was already set)
 	assert.Equal(t, "", store.setActiveCalled, "SetActive should NOT be called on refresh")
 }
 
@@ -248,23 +220,19 @@ func TestAuthLogin_Wrong2FA_FailsWithHint(t *testing.T) {
 	prompter := &mockPrompter{
 		email:    "alice@example.com",
 		password: "correct",
-		authCode: "000000", // wrong code
+		authCode: "000000",
 	}
 	appleErr := errors.New("invalid verification code")
 	mockAS := &mockAppStore{
-		bagOutput:   ipaappstore.BagOutput{AuthEndpoint: "https://auth.example.com"},
-		loginErrors: []error{ipaappstore.ErrAuthCodeRequired, appleErr},
+		endpoint:    "https://auth.example.com",
+		loginErrors: []error{appstore.ErrAuthCodeRequired, appleErr},
 	}
 	deps := helperMakeLoginDeps(store, prompter, mockAS)
 
 	_, err := helperRunLoginCmd(t, deps)
 	require.Error(t, err)
-
-	// AC-06-2: error contains Apple message + hint
 	assert.Contains(t, err.Error(), "invalid verification code")
 	assert.Contains(t, err.Error(), "2FA")
-
-	// No profile created
 	assert.Nil(t, store.upserted)
 	assert.False(t, store.saved)
 }
@@ -281,19 +249,15 @@ func TestAuthLogin_WrongPassword_FailsWithHint(t *testing.T) {
 	}
 	appleErr := errors.New("invalid credentials")
 	mockAS := &mockAppStore{
-		bagOutput:   ipaappstore.BagOutput{AuthEndpoint: "https://auth.example.com"},
-		loginErrors: []error{appleErr}, // non-ErrAuthCodeRequired → direct failure
+		endpoint:    "https://auth.example.com",
+		loginErrors: []error{appleErr},
 	}
 	deps := helperMakeLoginDeps(store, prompter, mockAS)
 
 	_, err := helperRunLoginCmd(t, deps)
 	require.Error(t, err)
-
-	// AC-07-1: error contains Apple message + hint
 	assert.Contains(t, err.Error(), "invalid credentials")
 	assert.Contains(t, err.Error(), "verify your credentials")
-
-	// No profile created
 	assert.Nil(t, store.upserted)
 	assert.False(t, store.saved)
 }
@@ -304,19 +268,15 @@ func TestAuthLogin_WrongPassword_FailsWithHint(t *testing.T) {
 
 func TestAuthLogin_CtrlC_NoSideEffects(t *testing.T) {
 	store := &mockStore{credentials: map[string]bool{}}
-	prompter := &mockPrompter{
-		emailErr: errors.New("interrupt"), // simulate Ctrl-C
-	}
+	prompter := &mockPrompter{emailErr: errors.New("interrupt")}
 	mockAS := &mockAppStore{}
 	deps := helperMakeLoginDeps(store, prompter, mockAS)
 
 	_, err := helperRunLoginCmd(t, deps)
 	require.Error(t, err)
-
-	// AC-07-2: no side effects
 	assert.Nil(t, store.upserted)
 	assert.False(t, store.saved)
-	assert.Equal(t, 0, mockAS.loginCalls, "Login should not be called")
+	assert.Equal(t, 0, mockAS.loginCalls)
 }
 
 // =============================================================================
@@ -337,8 +297,8 @@ func TestAuthLogin_DerivedID_Correct(t *testing.T) {
 			store := &mockStore{credentials: map[string]bool{}}
 			prompter := &mockPrompter{email: tc.email, password: "x"}
 			mockAS := &mockAppStore{
-				bagOutput:    ipaappstore.BagOutput{AuthEndpoint: "https://e.test"},
-				loginOutputs: []ipaappstore.LoginOutput{{Account: ipaappstore.Account{Name: "X", Email: tc.email}}},
+				endpoint:     "https://e.test",
+				loginResults: []appstore.LoginResult{{Name: "X", Email: tc.email}},
 				loginErrors:  []error{nil},
 			}
 			deps := helperMakeLoginDeps(store, prompter, mockAS)
@@ -359,8 +319,8 @@ func TestAuthLogin_CLIOverhead_UnderOneSecond(t *testing.T) {
 	store := &mockStore{credentials: map[string]bool{}}
 	prompter := &mockPrompter{email: "x@y.com", password: "p"}
 	mockAS := &mockAppStore{
-		bagOutput:    ipaappstore.BagOutput{AuthEndpoint: "https://e.test"},
-		loginOutputs: []ipaappstore.LoginOutput{{Account: ipaappstore.Account{Name: "X", Email: "x@y.com"}}},
+		endpoint:     "https://e.test",
+		loginResults: []appstore.LoginResult{{Name: "X", Email: "x@y.com"}},
 		loginErrors:  []error{nil},
 	}
 	deps := helperMakeLoginDeps(store, prompter, mockAS)
@@ -381,25 +341,21 @@ func TestAuthLogin_ProgressOutput_NoSecrets(t *testing.T) {
 	store := &mockStore{credentials: map[string]bool{}}
 	prompter := &mockPrompter{email: "alice@example.com", password: "secret-pass-123", authCode: "654321"}
 	mockAS := &mockAppStore{
-		bagOutput: ipaappstore.BagOutput{AuthEndpoint: "https://e.test"},
-		loginOutputs: []ipaappstore.LoginOutput{
-			{}, // first call: ErrAuthCodeRequired (output discarded)
-			{Account: ipaappstore.Account{Name: "Alice", Email: "a@b.com", PasswordToken: "tok-abc"}}, // second: success with token
+		endpoint: "https://e.test",
+		loginResults: []appstore.LoginResult{
+			{},
+			{Name: "Alice", Email: "a@b.com"},
 		},
-		loginErrors: []error{ipaappstore.ErrAuthCodeRequired, nil},
+		loginErrors: []error{appstore.ErrAuthCodeRequired, nil},
 	}
 	deps := helperMakeLoginDeps(store, prompter, mockAS)
 
 	output, err := helperRunLoginCmd(t, deps)
 	require.NoError(t, err)
 
-	// Contains progress messages
 	assert.True(t, strings.Contains(output, "Contacting") || strings.Contains(output, "Apple"),
 		"should contain progress message, got: %s", output)
-
-	// NFR-05/09: no password or token in output
 	assert.NotContains(t, output, "secret-pass-123", "password must not appear in output")
-	assert.NotContains(t, output, "tok-abc", "token must not appear in output")
 	assert.NotContains(t, output, "654321", "auth code must not appear in output after use")
 }
 
@@ -428,11 +384,11 @@ func TestAuthLogin_CtrlC_AtAuthCode_NoSideEffects(t *testing.T) {
 	prompter := &mockPrompter{
 		email:       "alice@example.com",
 		password:    "correct",
-		authCodeErr: errors.New("interrupt"), // Ctrl-C at 2FA prompt
+		authCodeErr: errors.New("interrupt"),
 	}
 	mockAS := &mockAppStore{
-		bagOutput:   ipaappstore.BagOutput{AuthEndpoint: "https://e.test"},
-		loginErrors: []error{ipaappstore.ErrAuthCodeRequired}, // first call triggers 2FA
+		endpoint:    "https://e.test",
+		loginErrors: []error{appstore.ErrAuthCodeRequired},
 	}
 	deps := helperMakeLoginDeps(store, prompter, mockAS)
 
@@ -440,7 +396,7 @@ func TestAuthLogin_CtrlC_AtAuthCode_NoSideEffects(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, store.upserted)
 	assert.False(t, store.saved)
-	assert.Equal(t, 1, mockAS.loginCalls, "first Login called, then Ctrl-C at 2FA prompt")
+	assert.Equal(t, 1, mockAS.loginCalls)
 }
 
 // =============================================================================
@@ -456,31 +412,25 @@ func helperRunLogoutCmd(t *testing.T, deps Deps, args ...string) (string, error)
 	return buf.String(), err
 }
 
-// --- AC-05-1: logout defaults to active ---
-
 func TestAuthLogout_DefaultActive(t *testing.T) {
 	store := &mockStore{
-		profiles: []account.Profile{
-			{ID: "alice_test", Email: "alice@test.com", Name: "Alice"},
-		},
-		activeID: "alice_test",
+		profiles:    []account.Profile{{ID: "alice_test", Email: "alice@test.com", Name: "Alice"}},
+		activeID:    "alice_test",
 		credentials: map[string]bool{"alice_test": true},
 	}
 	mockAS := &mockAppStore{}
 	deps := Deps{
 		Store: store,
-		AppStoreFactory: func(account.Profile) (ipaappstore.AppStore, error) { return mockAS, nil },
-		ConfigRoot: "/tmp/test-config",
+		AppStoreFactory: func(account.Profile) (appstore.ProfileAppStore, error) { return mockAS, nil },
+		ConfigRoot:      "/tmp/test-config",
 	}
 
 	output, err := helperRunLogoutCmd(t, deps)
 	require.NoError(t, err)
 	assert.Contains(t, output, "Logged out")
 	assert.Contains(t, output, "alice_test")
-	assert.True(t, mockAS.revokeCalled, "Revoke should be called")
+	assert.True(t, mockAS.revokeCalled)
 }
-
-// --- AC-05-2: logout explicit profile ---
 
 func TestAuthLogout_ExplicitProfile(t *testing.T) {
 	store := &mockStore{
@@ -488,14 +438,14 @@ func TestAuthLogout_ExplicitProfile(t *testing.T) {
 			{ID: "alice_test", Email: "alice@test.com"},
 			{ID: "bob_test", Email: "bob@test.com"},
 		},
-		activeID: "alice_test",
+		activeID:    "alice_test",
 		credentials: map[string]bool{"alice_test": true, "bob_test": true},
 	}
 	mockAS := &mockAppStore{}
 	deps := Deps{
 		Store: store,
-		AppStoreFactory: func(account.Profile) (ipaappstore.AppStore, error) { return mockAS, nil },
-		ConfigRoot: "/tmp/test",
+		AppStoreFactory: func(account.Profile) (appstore.ProfileAppStore, error) { return mockAS, nil },
+		ConfigRoot:      "/tmp/test",
 	}
 
 	output, err := helperRunLogoutCmd(t, deps, "bob_test")
@@ -503,8 +453,6 @@ func TestAuthLogout_ExplicitProfile(t *testing.T) {
 	assert.Contains(t, output, "bob_test")
 	assert.True(t, mockAS.revokeCalled)
 }
-
-// --- AC-05-3: logout non-existent ---
 
 func TestAuthLogout_NonExistent_ErrorWithHint(t *testing.T) {
 	store := &mockStore{credentials: map[string]bool{}}
@@ -516,116 +464,87 @@ func TestAuthLogout_NonExistent_ErrorWithHint(t *testing.T) {
 	assert.Contains(t, err.Error(), "accounts list")
 }
 
-// --- AC-05-4: logout no active ---
-
 func TestAuthLogout_NoActive_ErrorWithHint(t *testing.T) {
-	store := &mockStore{
-		activeID:    "",
-		credentials: map[string]bool{},
-	}
+	store := &mockStore{activeID: "", credentials: map[string]bool{}}
 	deps := Deps{Store: store, ConfigRoot: "/tmp/test"}
 
-	_, err := helperRunLogoutCmd(t, deps) // no args, no active
+	_, err := helperRunLogoutCmd(t, deps)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no active profile")
 	assert.Contains(t, err.Error(), "accounts use")
 }
 
-// --- AC-05-5: logout already logged-out (idempotent) ---
-
 func TestAuthLogout_AlreadyLoggedOut_Idempotent(t *testing.T) {
 	store := &mockStore{
-		profiles: []account.Profile{
-			{ID: "alice_test", Email: "alice@test.com"},
-		},
-		credentials: map[string]bool{"alice_test": false}, // logged out
+		profiles:    []account.Profile{{ID: "alice_test", Email: "alice@test.com"}},
+		credentials: map[string]bool{"alice_test": false},
 	}
 	mockAS := &mockAppStore{}
 	deps := Deps{
 		Store: store,
-		AppStoreFactory: func(account.Profile) (ipaappstore.AppStore, error) { return mockAS, nil },
-		ConfigRoot: "/tmp/test",
+		AppStoreFactory: func(account.Profile) (appstore.ProfileAppStore, error) { return mockAS, nil },
+		ConfigRoot:      "/tmp/test",
 	}
 
 	output, err := helperRunLogoutCmd(t, deps, "alice_test")
-	require.NoError(t, err, "idempotent logout should exit 0")
+	require.NoError(t, err)
 	assert.Contains(t, output, "already logged out")
-	assert.False(t, mockAS.revokeCalled, "Revoke should NOT be called for already-logged-out")
+	assert.False(t, mockAS.revokeCalled)
 }
-
-// --- AC-05-6: logout preserves metadata (implicit — we don't remove profile) ---
 
 func TestAuthLogout_PreservesMetadata(t *testing.T) {
 	store := &mockStore{
-		profiles: []account.Profile{
-			{ID: "alice_test", Email: "alice@test.com", Name: "Alice"},
-		},
+		profiles:    []account.Profile{{ID: "alice_test", Email: "alice@test.com", Name: "Alice"}},
 		credentials: map[string]bool{"alice_test": true},
 	}
 	mockAS := &mockAppStore{}
 	deps := Deps{
 		Store: store,
-		AppStoreFactory: func(account.Profile) (ipaappstore.AppStore, error) { return mockAS, nil },
-		ConfigRoot: "/tmp/test",
+		AppStoreFactory: func(account.Profile) (appstore.ProfileAppStore, error) { return mockAS, nil },
+		ConfigRoot:      "/tmp/test",
 	}
 
 	_, err := helperRunLogoutCmd(t, deps, "alice_test")
 	require.NoError(t, err)
-	// Profile NOT removed from store (metadata retained)
-	assert.Equal(t, "", store.removedID, "Remove should NOT be called")
-	// Profile still in list
+	assert.Equal(t, "", store.removedID)
 	profiles, _ := store.List()
 	assert.Len(t, profiles, 1)
 }
 
-// --- AC-05-7: active→logged-out contract (double logout is idempotent) ---
-
 func TestAuthLogout_DoubleLogout_Idempotent(t *testing.T) {
 	store := &mockStore{
-		profiles: []account.Profile{
-			{ID: "alice_test", Email: "alice@test.com"},
-		},
-		activeID: "alice_test",
+		profiles:    []account.Profile{{ID: "alice_test", Email: "alice@test.com"}},
+		activeID:    "alice_test",
 		credentials: map[string]bool{"alice_test": true},
 	}
 	mockAS := &mockAppStore{}
 	deps := Deps{
 		Store: store,
-		AppStoreFactory: func(account.Profile) (ipaappstore.AppStore, error) { return mockAS, nil },
-		ConfigRoot: "/tmp/test",
+		AppStoreFactory: func(account.Profile) (appstore.ProfileAppStore, error) { return mockAS, nil },
+		ConfigRoot:      "/tmp/test",
 	}
 
-	// First logout — succeeds, Revoke called
 	_, err := helperRunLogoutCmd(t, deps)
 	require.NoError(t, err)
 	assert.True(t, mockAS.revokeCalled)
 
-	// Simulate keychain now has no credentials (Revoke removed them)
 	store.credentials["alice_test"] = false
-
-	// Second logout — idempotent (AC-05-5 behavior)
 	_, err = helperRunLogoutCmd(t, deps)
-	require.NoError(t, err, "second logout should be idempotent exit 0")
+	require.NoError(t, err)
 }
-
-// --- Revoke failure reports error (NFR-04 spirit) ---
 
 func TestAuthLogout_RevokeFailure_ReportsError(t *testing.T) {
 	store := &mockStore{
-		profiles: []account.Profile{
-			{ID: "alice_test", Email: "alice@test.com"},
-		},
+		profiles:    []account.Profile{{ID: "alice_test", Email: "alice@test.com"}},
 		credentials: map[string]bool{"alice_test": true},
 	}
-	revokeErr := errors.New("keychain locked")
-	mockAS := &mockAppStore{revokeErr: revokeErr}
+	mockAS := &mockAppStore{revokeErr: errors.New("keychain locked")}
 	deps := Deps{
 		Store: store,
-		AppStoreFactory: func(account.Profile) (ipaappstore.AppStore, error) { return mockAS, nil },
-		ConfigRoot: "/tmp/test",
+		AppStoreFactory: func(account.Profile) (appstore.ProfileAppStore, error) { return mockAS, nil },
+		ConfigRoot:      "/tmp/test",
 	}
 
 	_, err := helperRunLogoutCmd(t, deps, "alice_test")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "error")
 }
