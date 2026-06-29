@@ -3,25 +3,72 @@ package ui
 
 import (
 	"charm.land/huh/v2"
-	"github.com/yeuleh/ipa-manager/internal/apperr"
+
+	"github.com/yeuleh/ipa-manager/internal/account"
 )
 
-// SelectProfile shows an interactive account picker and returns the chosen id.
-//
-// TODO(mission): build options from the profile store.
-func SelectProfile(labels []string) (string, error) {
-	_ = huh.NewSelect[string]()
-	return "", apperr.ErrNotImplemented
+// prompter is the production implementation of Prompter using huh v2.
+type prompter struct{}
+
+// NewPrompter returns a production Prompter backed by huh v2.
+func NewPrompter() Prompter {
+	return &prompter{}
 }
 
-// Confirm shows a yes/no prompt.
-func Confirm(title string) (bool, error) {
-	_ = huh.NewConfirm()
-	return false, apperr.ErrNotImplemented
+func (p *prompter) InputEmail() (string, error) {
+	var email string
+	err := huh.NewInput().
+		Title("Apple ID email").
+		Value(&email).
+		Run()
+	return email, err
 }
 
-// InputAuthCode prompts the user for a 2FA verification code.
-func InputAuthCode() (string, error) {
-	_ = huh.NewInput()
-	return "", apperr.ErrNotImplemented
+func (p *prompter) InputPassword() (string, error) {
+	var password string
+	err := huh.NewInput().
+		Title("Apple ID password").
+		EchoMode(huh.EchoModePassword).
+		Value(&password).
+		Run()
+	return password, err
+}
+
+func (p *prompter) InputAuthCode() (string, error) {
+	var code string
+	err := huh.NewInput().
+		Title("2FA verification code").
+		Value(&code).
+		Run()
+	return code, err
+}
+
+func (p *prompter) Confirm(title string) (bool, error) {
+	var result bool
+	err := huh.NewConfirm().
+		Title(title).
+		Value(&result).
+		Run()
+	return result, err
+}
+
+func (p *prompter) SelectProfile(profiles []account.Profile, activeID string) (string, error) {
+	var selected string
+	opts := make([]huh.Option[string], 0, len(profiles))
+	for _, prof := range profiles {
+		label := prof.Email
+		if prof.Name != "" {
+			label = prof.Name + " <" + prof.Email + ">"
+		}
+		if prof.ID == activeID {
+			label += " (active)"
+		}
+		opts = append(opts, huh.NewOption(label, prof.ID))
+	}
+	err := huh.NewSelect[string]().
+		Title("Select profile").
+		Options(opts...).
+		Value(&selected).
+		Run()
+	return selected, err
 }
