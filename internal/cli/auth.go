@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -127,8 +128,67 @@ func authLogoutCmd(deps Deps) *cobra.Command {
 		Short: "Revoke credentials (defaults to active profile)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO(T5): implement logout flow (design §3.8)
-			return fmt.Errorf("auth logout: not yet implemented")
+			out := cmd.OutOrStdout()
+
+			if err := deps.Store.Load(); err != nil {
+				return fmt.Errorf("failed to load config: %w", err)
+			}
+
+			// Resolve target profile (design §3.8).
+			var targetID string
+			if len(args) > 0 {
+				targetID = args[0]
+			} else {
+				activeID, _ := deps.Store.GetActiveID()
+				if activeID == "" {
+					// AC-05-4: no active profile → error + hint (AC-07-3).
+					return fmt.Errorf("no active profile. Run `accounts use <profile-id>` to set one.")
+				}
+				targetID = activeID
+			}
+
+			// Check profile exists (AC-05-3).
+			profile, err := deps.Store.Get(targetID)
+			if err != nil {
+				return fmt.Errorf("profile '%s' not found. Run `accounts list` to see available profiles.", targetID)
+			}
+
+			// Check credentials — idempotent if already logged out (AC-05-5).
+			hasCreds, _ := deps.Store.HasCredentials(targetID)
+			if !hasCreds {
+				fmt.Fprintf(out, "Profile '%s' is already logged out.\n", targetID)
+				return nil
+			}
+
+			// Revoke credentials + delete cookie jar (best-effort error collection).
+			var errs []error
+
+			appStore, err := deps.AppStoreFactory(profile)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("construct appstore: %w", err))
+			} else {
+				if err := appStore.Revoke(); err != nil {
+					errs = append(errs, fmt.Errorf("revoke keychain: %w", err))
+				}
+			}
+
+			// Delete cookie jar file (best-effort, ignore NotExist).
+			cookiePath := account.CookieJarPath(targetID, deps.ConfigRoot)
+			if err := os.Remove(cookiePath); err != nil && !os.IsNotExist(err) {
+				errs = append(errs, fmt.Errorf("delete cookie jar: %w", err))
+			}
+
+			// Do NOT touch metadata, do NOT change active (AC-05-1).
+			if len(errs) > 0 {
+				fmt.Fprintf(out, "Logged out '%s' with errors:\n", targetID)
+				for _, e := range errs {
+					fmt.Fprintf(out, "  - %v\n", e)
+				}
+				return fmt.Errorf("logout completed with %d error(s)", len(errs))
+			}
+
+			fmt.Fprintf(out, "Logged out: %s (profile metadata retained).\n", targetID)
+			return nil
 		},
 	}
 }
