@@ -15,3 +15,6 @@ coverage.txt
 # --- MindTrek / agent workspace ---
 # Local agent scratch (never commit secrets or local-only state)
 .opencode/local/
+
+# --- Temp scripts (per AGENTS.md CONVENTIONS) ---
+/temp/
