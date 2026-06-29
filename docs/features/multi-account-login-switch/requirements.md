@@ -83,11 +83,10 @@ ipa-manager accounts remove alice_example_com  # 彻底删除 alice
 3. **`accounts list`** — 列出所有 profile 及状态（active / logged-in / logged-out）。
 4. **`accounts use <profile-id>`** — 切换 active profile（严格：profile 必须存在且已登录）。
 5. **`accounts remove <profile-id>`** — 全量删除 profile（元数据 + keychain namespace + cookie jar），需确认。
-6. **Profile store 实现** — `account.Store` 支持 `List/Get/Add/Remove`，持久化到 `~/.ipa-manager/config.json`。
-7. **Config 实现** — `config.Load/Save` 持久化 `ActiveProfileID`。
-8. **`appstore.NewProfileAppStore`** — 工厂接线，注入 `ProfileKeychain` + per-profile cookie jar，调 ipatool 的 `appstore.NewAppStore`。
-9. **UI 提示器** — `ui.SelectProfile/Confirm/InputAuthCode` + email/password 输入实现。
-10. **2FA 重试流** — `ErrAuthCodeRequired` → 提示 → 同 email/password + AuthCode 重试一次。
+6. **Profile store 实现** — `account.Store` 支持 `List/Get/Upsert/Remove` + active 指针管理，持久化到单一 `~/.ipa-manager/config.json`（含 `active_profile_id` 与 `profiles[]`）。`config.Load/Save` 弃用（design DD-04 澄清：单文件单所有者，避免循环依赖）。
+7. **`appstore.NewProfileAppStore`** — 工厂接线，注入 `ProfileKeychain` + per-profile cookie jar，调 ipatool 的 `appstore.NewAppStore`。
+8. **UI 提示器** — `ui.SelectProfile/Confirm/InputAuthCode` + email/password 输入实现。
+9. **2FA 重试流** — `ErrAuthCodeRequired` → 提示 → 同 email/password + AuthCode 重试一次。
 
 ### 3.2 Out of Scope（留给后续 mission）
 
@@ -103,7 +102,7 @@ ipa-manager accounts remove alice_example_com  # 彻底删除 alice
 
 ### 3.3 Non-goals
 
-- **不持久化 Apple ID 密码**：password 仅传给 Apple API，任何时刻都不写盘。
+- **不持久化 Apple ID 密码到明文文件**：password 不写入 `config.json`、不写入日志。**已知例外**（NFR-05）：ipatool 的 `Account` 结构体含 `Password` 字段，`Login()` 成功后会把含该字段的 account JSON 写入 macOS Keychain（受 Keychain 加密保护）——这是 ipatool 固有行为，本项目不额外脱敏。详见 §11 Design-Phase Discovery。
 - **不绕过 2FA**：所有 2FA 流程遵守 Apple 规则。
 - **不做密码强度校验 / email 格式校验**：交给 Apple 判定（错误密码/格式由 Apple 返回，本 mission 透传）。
 - **不提供 `--id` 手动覆盖**：profile ID 严格由 email 派生（见 §4.1 算法）。
@@ -480,6 +479,13 @@ ipa-manager
 - password 进 keychain（受 macOS Keychain 加密）—— ipatool 固有行为，不额外脱敏
 
 **用户决策**：选 Option A（接受 ipatool 行为），2026-06-29 确认。替代方案 Option B（ProfileKeychain.Set 拦截脱敏）/ Option C（post-process keychain）被否——理由是边际安全增益不抵 ipatool schema 耦合成本。
+
+### Spock Design Review Fixes（design 阶段评审 NOT-PASS 后的需求修正）
+
+| Finding | 严重度 | 修正 |
+|---------|-------|------|
+| SPK-B1: §3.3 Non-goals 仍说"password 不写盘"，与修订后的 NFR-05 矛盾 | BLOCKER | §3.3 改为"不写入明文文件 + 不写入日志"，并显式声明 keychain 例外（引用 NFR-05 + §11）|
+| SPK-B2: §3.1 item 7 "Config 实现 config.Load/Save" 与 design DD-04"弃用 config.Load/Save"矛盾 | BLOCKER | §3.1 合并原 item 6/7 为单一 item 6：account.Store 管理单文件 config.json（含 active + profiles）；后续 item 重新编号 |
 
 ---
 
