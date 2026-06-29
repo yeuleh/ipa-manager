@@ -71,8 +71,32 @@ func accountsUseCmd(deps Deps) *cobra.Command {
 		Short: "Set the active account profile",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO(T3): implement use flow (design §3.5, DD-07)
-			return fmt.Errorf("accounts use: not yet implemented")
+			out := cmd.OutOrStdout()
+			id := args[0]
+
+			if err := deps.Store.Load(); err != nil {
+				return fmt.Errorf("failed to load config: %w", err)
+			}
+
+			// DD-07 strict validation order: existence before credentials.
+			if _, err := deps.Store.Get(id); err != nil {
+				return fmt.Errorf("profile '%s' not found. Run `accounts list` to see available profiles.", id)
+			}
+
+			hasCreds, _ := deps.Store.HasCredentials(id)
+			if !hasCreds {
+				return fmt.Errorf("profile '%s' has no credentials. Run `auth login` to authenticate.", id)
+			}
+
+			if err := deps.Store.SetActive(id); err != nil {
+				return fmt.Errorf("failed to set active profile: %w", err)
+			}
+			if err := deps.Store.Save(); err != nil {
+				return fmt.Errorf("failed to save config: %w", err)
+			}
+
+			fmt.Fprintf(out, "Active profile: %s\n", id)
+			return nil
 		},
 	}
 }
