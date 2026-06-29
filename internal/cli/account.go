@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+
+	"github.com/yeuleh/ipa-manager/internal/ui"
 )
 
 func accountCmd(deps Deps) *cobra.Command {
@@ -21,8 +23,44 @@ func accountsListCmd(deps Deps) *cobra.Command {
 		Use:   "list",
 		Short: "List configured account profiles",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO(T2): implement list flow (design §3.6)
-			return fmt.Errorf("accounts list: not yet implemented")
+			out := cmd.OutOrStdout()
+
+			if err := deps.Store.Load(); err != nil {
+				return fmt.Errorf("failed to load config: %w", err)
+			}
+
+			profiles, err := deps.Store.List()
+			if err != nil {
+				return fmt.Errorf("failed to list profiles: %w", err)
+			}
+
+			if len(profiles) == 0 {
+				fmt.Fprintln(out, "No profiles configured. Run `auth login` to add one.")
+				return nil
+			}
+
+			activeID, err := deps.Store.GetActiveID()
+			if err != nil {
+				return fmt.Errorf("failed to get active profile: %w", err)
+			}
+
+			headers := []string{"ACTIVE", "ID", "EMAIL", "NAME", "STATUS"}
+			var rows [][]string
+			for _, p := range profiles {
+				hasCreds, _ := deps.Store.HasCredentials(p.ID)
+				status := "logged-out"
+				if hasCreds {
+					status = "logged-in"
+				}
+				marker := ""
+				if p.ID == activeID {
+					marker = "*"
+				}
+				rows = append(rows, []string{marker, p.ID, p.Email, p.Name, status})
+			}
+
+			fmt.Fprintln(out, ui.RenderTable(headers, rows))
+			return nil
 		},
 	}
 }
