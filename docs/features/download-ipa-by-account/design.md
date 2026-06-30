@@ -1,6 +1,6 @@
 # Design — download-ipa-by-account
 
-> 本设计基于 `requirements.md`（42 AC / 10 NFR / 10 US）和 ipatool fork `v2.3.1-fix-auth.5` 源码实证。所有 ipatool API 签名均从 module cache 实际源码验证，非猜测。
+> 本设计基于 `requirements.md`（47 AC / 11 NFR / 11 US）和 ipatool fork `v2.3.1-fix-auth.5` 源码实证。所有 ipatool API 签名均从 module cache 实际源码验证，非猜测。
 
 ---
 
@@ -20,6 +20,7 @@
 | US-08 (P2) | --profile flag | DD-07 profile 解析器 |
 | US-09 (P3) | 指定版本下载 | DD-04 ExternalVersionID 参数 |
 | US-10 (P3) | --output 自定义路径 | DD-04 OutputPath 参数，DD-02 索引跟踪 |
+| US-11 (P2) | 多版本共存 | DD-02 复合键 + DD-03 多版本文件 + DD-04 不删旧版 + DD-06 clean --version |
 
 ### Non-goals（约束设计的边界）
 
@@ -444,6 +445,8 @@ type Entry struct {
 
 **原子写**：与 config.json 一致（tmp + rename，DD-10 of multi-account mission）。
 
+**文件删除职责（MV-02 fix）**：`Store.Remove` / `RemoveVersion` / `CleanAll` **自身负责**删除物理文件 + 清除索引条目。CLI 层仅做 stat-check（用于确认提示）和调用这些方法——**不直接 os.Remove**。这避免双层删除的歧义。
+
 **理由**：
 - JSON 文件最简——无外部依赖（SQLite 过度），人类可读（便于调试），单文件原子写可靠。
 - `file_path` 存绝对路径——支持 `--output` 自定义路径（AC-10-2 索引跟踪）。
@@ -517,13 +520,16 @@ User: ipa-manager app download <bundle-id>
   │         （ipatool 的 resolveDestinationPath 检测到目录后会用下载响应中的版本生成文件名，
   │          因此 --external-version-id 的版本也正确嵌入文件名）
   │
-  ├─ [computeSkipCheckPath(outputPath, app)] → targetFileForStat
-  │    ├─ --output is dir or empty → targetFileForStat = "<dir>/<bundleID>_<appID>_<lookupVersion>.ipa"（近似检测，用于 skip 提示）
+  ├─ [computeSkipCheckPath(outputPath, app, --external-version-id)] → targetFileForStat（MV-01 fix）
+  │    ├─ --external-version-id given → targetFileForStat = ""（SKIP CHECK BYPASS）
+  │    │    （实际版本在下载前不可知——Lookup 返回最新版而非请求的历史版本。
+  │    │     对 P3 稀有场景跳过 skip 优化，总是下载。ipatool 写同版本同文件名=幂等覆盖）
+  │    ├─ --output is dir or empty → targetFileForStat = "<dir>/<bundleID>_<appID>_<lookupVersion>.ipa"
   │    └─ --output is file → targetFileForStat = outputPath
   │
-  ├─ [os.Stat(targetFileForStat)] → fileExists? (D-03/R2-03 fix: physical file check)
-  │    ├─ exists AND not --force → "already exists: <path> (use --force to overwrite)" + exit 0 (AC-02-5, AC-10-3)
-  │    └─ not exists OR --force → continue
+  ├─ targetFileForStat != "" ?
+  │    ├─ YES → [os.Stat(targetFileForStat)] → exists AND not --force → "already exists" + exit 0 (AC-02-5, AC-10-3)
+  │    └─ NO (--external-version-id) → always continue to download
   │
   ├─ [appStore.Download(DownloadInput{BundleID, AppID, OutputPath, Progress, ExternalVersionID})]
   │    └─ ipatool 内部 resolveDestinationPath 用下载响应的版本生成最终文件名
@@ -1048,7 +1054,7 @@ func NewStore(libraryRoot string) Store
 ### 5.1 `app download <bundle-id>` — Happy Path
 
 ```
-User: ipa-manager download com.tencent.xin
+User: ipa-manager app download com.tencent.xin
   │
   ├─ [resolveProfile(deps, --profile="", requireCreds=true)]
   │    └─ → Profile{ID:"alice_example_com", ...}
@@ -1086,7 +1092,7 @@ User: ipa-manager download com.tencent.xin
 ### 5.2 `app download` — License Required (free app, interactive)
 
 ```
-User: ipa-manager download com.example.freeapp
+User: ipa-manager app download com.example.freeapp
   │
   ├─ ... (AccountInfo, Lookup, existence check) ...
   │
@@ -1321,9 +1327,9 @@ implementation 阶段能否不猜谜地推进？
 
 - [x] **每个 ipatool API 已验证**：AccountInfo / Lookup / Search / Download / Purchase / ReplicateSinf / Bag —— 全部从 `v2.3.1-fix-auth.5` 源码读到，签名非猜测。
 - [x] **数据格式确定**：index.json schema（DD-02）、IPA 文件名规则（DD-03）、路径布局。
-- [x] **每个 AC 有对应处理流**：§5 的流程图覆盖 42 个 AC 的所有 Then 子句。
+- [x] **每个 AC 有对应处理流**：§5 的流程图覆盖 47 个 AC 的所有 Then 子句。
 - [x] **错误路径有定义**：DD-08 错误映射表 + §5.10 失败路径汇总。
-- [x] **接口完整**：ProfileAppStore（+7 方法含 RefreshSession，D-01 fix）、library.Store（5 方法）、Deps（+LibraryStore）。
+- [x] **接口完整**：ProfileAppStore（+7 方法含 RefreshSession）、library.Store（7 方法含 GetVersion/RemoveVersion 多版本支持）、Deps（+LibraryStore）。
 - [x] **Token retry 可实现**：RefreshSession() 使用 adapter 缓存的 Password，不泄露到 CLI 层（D-01 fix）。
 - [x] **版本追踪已明确**：默认路径传目录给 ipatool → 从下载响应文件名解析版本；多版本共存（同 bundle-id 不同 version 各自独立条目）。
 - [x] **Skip 逻辑基于物理文件**：os.Stat(targetPath) 前置检查（D-03 fix）。
