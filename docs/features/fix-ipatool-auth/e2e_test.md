@@ -15,7 +15,7 @@ Validate that swapping the ipatool dependency to a forked version with PR #493 a
 | OS                       | macOS (Apple Silicon or Intel)                                     |
 | Go version               | ≥ 1.26                                                             |
 | Repo                     | `feature/fix-ipatool-auth` branch, clean working tree              |
-| GitHub fork              | `github.com/yeuleh/ipatool` created, tagged `v2.3.1-fix-auth.1`     |
+| GitHub fork              | `github.com/yeuleh/ipatool` created, tagged `v2.3.1-fix-auth.4`     |
 | Apple ID                 | A valid Apple ID with 2FA enabled (test account)                   |
 | Keychain                 | Clean (no stale ipatool account entries from previous attempts)    |
 | Network                  | Internet access to `auth.itunes.apple.com`                         |
@@ -83,10 +83,10 @@ Validate that swapping the ipatool dependency to a forked version with PR #493 a
 
 **Actions**:
 1. Read go.mod, locate the `replace` directive for ipatool.
-2. Verify: `replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-auth.1`
+2. Verify: `replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-auth.4`
 3. Verify the ref is a tag or 40-char SHA (not a branch name).
 
-**Expected**: Replace directive present, points to fork at immutable tag `v2.3.1-fix-auth.1`.
+**Expected**: Replace directive present, points to fork at immutable tag `v2.3.1-fix-auth.4`.
 
 **Pass/Fail**: Directive present and ref is immutable = PASS.
 

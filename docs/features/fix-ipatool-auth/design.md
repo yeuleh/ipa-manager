@@ -51,15 +51,15 @@ The only change in this mission is the dependency source: `majd/ipatool/v2` → 
 
 **Alternative considered**: Fork from v2.3.0 tag. Rejected — would miss the 429 fix and require more manual patches later.
 
-#### DD-02: Tag as v2.3.1-fix-auth.1
+#### DD-02: Tag as v2.3.1-fix-auth.4
 
-**Decision**: Tag the fork's patched commit as `v2.3.1-fix-auth.1`.
+**Decision**: Tag the fork's patched commit as `v2.3.1-fix-auth.4`.
 
 **Rationale**:
 - Semver-compatible (Go modules require valid semver for tagged releases).
 - `v2.3.1` signals it's post-v2.3.0.
-- `-fix-auth.1` pre-release suffix clearly identifies the purpose.
-- If we need to revise (e.g., add PR #500), we increment to `.2`.
+- `-fix-auth.N` pre-release suffix clearly identifies the purpose.
+- Initial tags `.1`–`.3` were consumed by checksum churn (force-pushing broke sum.golang.org's recorded checksums). Tag `.4` is the stable final tag with correct FORK_NOTES.md and a clean checksum. Future revisions increment to `.5`.
 
 **Alternative considered**: Pseudo-version `v2.3.1-0.20260630000000-abcdef`. Rejected — unreadable, though valid. A named tag is more maintainable.
 
@@ -67,7 +67,7 @@ The only change in this mission is the dependency source: `majd/ipatool/v2` → 
 
 **Decision**:
 ```go
-replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-auth.1
+replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-auth.4
 ```
 
 **Rationale**:
@@ -129,7 +129,7 @@ The ipa-manager application's data models, state, and interfaces are unchanged. 
 
 | File         | Change                                                                                       |
 | ------------ | -------------------------------------------------------------------------------------------- |
-| `go.mod`     | Add `replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-auth.1`    |
+| `go.mod`     | Add `replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-auth.4`    |
 | `go.sum`     | Updated by `go mod tidy` (new checksums for the fork)                                         |
 
 ### Files NOT Modified (important)
@@ -149,7 +149,7 @@ The ipa-manager application's data models, state, and interfaces are unchanged. 
 | --------------------------------- | ---------------------------- |
 | GitHub fork                       | `github.com/yeuleh/ipatool`  |
 | Patched main branch               | fork's `main`                |
-| Tag                               | `v2.3.1-fix-auth.1`          |
+| Tag                               | `v2.3.1-fix-auth.4`          |
 | Fork documentation                | `FORK_NOTES.md` in fork root |
 
 ## 5. Processing Flows
@@ -175,7 +175,7 @@ The ipa-manager application's data models, state, and interfaces are unchanged. 
 │                                                                  │
 │  6. Write FORK_NOTES.md                                          │
 │                                                                  │
-│  7. Commit + tag: git tag v2.3.1-fix-auth.1                      │
+│  7. Commit + tag: git tag v2.3.1-fix-auth.4                      │
 │                                                                  │
 │  8. Push fork to github.com/yeuleh/ipatool                       │
 │                                                                  │

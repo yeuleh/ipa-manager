@@ -50,7 +50,7 @@ No parallel tracks. No Foundation tasks (T1 is a story task — it produces the 
 - Fork repo created from `majd/ipatool`
 - `main` branch with PR #493 cherry-picked (commit `a98f833`)
 - `FORK_NOTES.md` at fork root
-- Tag `v2.3.1-fix-auth.1`
+- Tag `v2.3.1-fix-auth.4`
 
 **Steps**:
 1. Fork `majd/ipatool` to `yeuleh/ipatool` via `gh repo fork` or GitHub UI.
@@ -61,23 +61,23 @@ No parallel tracks. No Foundation tasks (T1 is a story task — it produces the 
 6. `go test ./...` — verify all pass.
 7. Write `FORK_NOTES.md` with: base commit `majd/ipatool@dcddce4`, applied PR #493 commit `a98f833`, purpose, sync procedure.
 8. `git add FORK_NOTES.md && git commit -m "docs: FORK_NOTES — fork provenance and sync procedure"`
-9. `git tag v2.3.1-fix-auth.1`
+9. `git tag v2.3.1-fix-auth.4`
 10. `git push origin main --tags`
 
 **Acceptance command**:
 ```bash
 # Local verification
-cd ./temp/ipatool-spike && go build ./... && go test ./... && git tag --list v2.3.1-fix-auth.1 && test -f FORK_NOTES.md
+cd ./temp/ipatool-spike && go build ./... && go test ./... && git tag --list v2.3.1-fix-auth.4 && test -f FORK_NOTES.md
 # Remote verification (tag pushed and fetchable)
-cd ./temp/ipatool-spike && git ls-remote --tags origin v2.3.1-fix-auth.1 | grep v2.3.1-fix-auth.1
+cd ./temp/ipatool-spike && git ls-remote --tags origin v2.3.1-fix-auth.4 | grep v2.3.1-fix-auth.4
 # Go module fetchability (from ipa-manager repo)
-GOPROXY=direct go mod download github.com/yeuleh/ipatool/v2@v2.3.1-fix-auth.1 && echo "fetchable"
+GOPROXY=direct go mod download github.com/yeuleh/ipatool/v2@v2.3.1-fix-auth.4 && echo "fetchable"
 ```
 
 **Completion criteria**:
 - Spock review pass (fork has correct base + patch + tag + docs).
 - `go build ./...` and `go test ./...` pass in the fork.
-- Tag `v2.3.1-fix-auth.1` exists.
+- Tag `v2.3.1-fix-auth.4` exists.
 - `FORK_NOTES.md` exists and records all three items (base commit, applied PR, sync procedure).
 
 **Rollback note**: The fork repo is external. If created incorrectly, delete it on GitHub and recreate. No ipa-manager state is affected at this point.
@@ -100,7 +100,7 @@ GOPROXY=direct go mod download github.com/yeuleh/ipatool/v2@v2.3.1-fix-auth.1 &&
 - `go.sum` — updated by `go mod tidy`
 
 **Steps**:
-1. Edit `go.mod`: add `replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-auth.1`
+1. Edit `go.mod`: add `replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-auth.4`
 2. `go mod tidy` — updates go.sum with fork checksums.
 3. `go build ./...` — must succeed (E2E-001).
 4. `go build -o ./bin/ipa-manager ./cmd/ipa-manager` — build binary for T3.
@@ -210,7 +210,7 @@ grep "replace.*yeuleh/ipatool" go.mod
 **Acceptance commands**:
 ```bash
 # Switch-back proof (E2E-008)
-sed -i.bak 's|yeuleh/ipatool/v2 v2.3.1-fix-auth.1|majd/ipatool/v2 v2.3.0|' go.mod && \
+sed -i.bak 's|yeuleh/ipatool/v2 v2.3.1-fix-auth.4|majd/ipatool/v2 v2.3.0|' go.mod && \
 go build ./... && go test ./... -count=1 && \
 mv go.mod.bak go.mod && go mod tidy
 
