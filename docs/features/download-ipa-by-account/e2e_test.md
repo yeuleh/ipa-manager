@@ -192,6 +192,43 @@
 - **Then**: 各自目录下均有 IPA 文件
 - **Pass**: 两个文件均存在（手动）
 
+### US-11 — Multi-version（多版本共存）
+
+#### E2E-046 / AC-11-1 — Download newer version keeps old version
+- **Type**: happy
+- **Given**: mockLibraryStore 已有 Entry{BundleID:"com.tencent.xin", Version:"8.0.34"}；mockAppStore.Lookup 返回 Version:"8.0.35"；os.Stat 检测到 8.0.35 文件不存在
+- **When**: 运行 `app download com.tencent.xin`
+- **Then**: 8.0.35 被下载；8.0.34 **不被删除**；mockLibraryStore.Add 被调用（新增 8.0.35 条目，不触碰 8.0.34）
+- **Pass**: mockAS.downloadCalls == 1 AND mockLS.addCalled == true AND mockLS 中同时有 8.0.34 和 8.0.35
+
+#### E2E-047 / AC-11-2 — Download same version skips
+- **Type**: edge
+- **Given**: os.Stat 检测到 8.0.35 文件**已存在**；无 --force
+- **When**: 运行 `app download com.tencent.xin`
+- **Then**: "already exists"；Download 未调用；exit 0
+- **Pass**: output 含 "already exists" AND mockAS.downloadCalls == 0
+
+#### E2E-048 / AC-05-10 — Library clean all versions of same app
+- **Type**: happy
+- **Given**: mockLibraryStore 有 com.tencent.xin 的 2 个版本（8.0.34 + 8.0.35）；mockPrompter.confirm=true
+- **When**: 运行 `library clean com.tencent.xin`（无 --version）
+- **Then**: 确认提示列出全部 2 个版本；2 个文件被删除；exit 0
+- **Pass**: output 含 "2 version" AND mockLS.removeCalled == true AND exit 0
+
+#### E2E-049 / AC-05-11 — Library clean specific version
+- **Type**: happy
+- **Given**: mockLibraryStore 有 com.tencent.xin 的 8.0.34 和 8.0.35；mockPrompter.confirm=true
+- **When**: 运行 `library clean com.tencent.xin --version 8.0.34`
+- **Then**: 仅确认并删除 8.0.34；8.0.35 保留；exit 0
+- **Pass**: output 含 "8.0.34" AND output 不含删除 8.0.35 的操作 AND exit 0
+
+#### E2E-050 / AC-05-12 — Library clean non-existent version
+- **Type**: edge
+- **Given**: mockLibraryStore 有 com.tencent.xin 的 8.0.35（无 8.0.34）
+- **When**: 运行 `library clean com.tencent.xin --version 8.0.34`
+- **Then**: 显示 "no IPA for 'com.tencent.xin' version '8.0.34'"；exit 0（幂等）
+- **Pass**: output 含 "no IPA" AND output 含 "8.0.34" AND exit 0
+
 ### US-04 — Library list
 
 #### E2E-021 / AC-04-1 — Library list happy path
@@ -506,6 +543,11 @@
 | E2E-043 | AC-10-4 | US-10 | failure |
 | E2E-044 | AC-10-5 | US-10 | failure |
 | E2E-045 | AC-10-6 | US-10 | failure |
+| E2E-046 | AC-11-1 | US-11 | happy |
+| E2E-047 | AC-11-2 | US-11 | edge |
+| E2E-048 | AC-05-10 | US-05/11 | happy |
+| E2E-049 | AC-05-11 | US-05/11 | happy |
+| E2E-050 | AC-05-12 | US-05/11 | edge |
 | E2E-N01 | NFR-04 | — | NFR |
 | E2E-N02 | NFR-05 | — | NFR (manual) |
 | E2E-N03 | NFR-08 | — | NFR |
@@ -526,6 +568,7 @@
 | US-08 | E2E-005, 016, 023, 029, 035~037 | ✓ 全覆盖 |
 | US-09 | E2E-038, 039 | ✓ 全覆盖 |
 | US-10 | E2E-040~045 | ✓ 全覆盖 |
+| US-11 | E2E-046~050 | ✓ 全覆盖 |
 
 **无未覆盖的 user story。**
 

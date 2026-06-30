@@ -376,19 +376,28 @@ type ReplicateSinfInput struct {
 ```go
 // Store manages the per-profile IPA library: file paths + metadata index.
 // Used as Deps.LibraryStore in CLI layer.
+// Supports multiple versions per bundle-id (user-confirmed multi-version design).
 type Store interface {
-    // Add registers a downloaded IPA in the profile's index + verifies file exists.
+    // Add inserts or replaces an entry by (bundle_id, version) composite key.
+    // If an entry with the same (bundle_id, version) exists, replaces it;
+    // otherwise appends. Different versions coexist.
     Add(profileID string, entry Entry) error
 
     // List returns all IPA entries for the profile.
     List(profileID string) ([]Entry, error)
 
-    // Get returns the entry for a specific bundle-id (or ErrEntryNotFound).
-    Get(profileID, bundleID string) (Entry, error)
+    // Get returns ALL versions of a bundle-id (may be 0, 1, or many).
+    Get(profileID, bundleID string) ([]Entry, error)
 
-    // Remove deletes the IPA file (if exists) + removes the index entry.
-    // Returns ErrEntryNotFound if bundle-id not in index.
-    Remove(profileID, bundleID string) error
+    // GetVersion returns a specific version entry (or ErrEntryNotFound).
+    GetVersion(profileID, bundleID, version string) (Entry, error)
+
+    // Remove deletes ALL versions of a bundle-id + their files.
+    // Returns count of removed entries. ErrEntryNotFound if bundle-id not in index.
+    Remove(profileID, bundleID string) (int, error)
+
+    // RemoveVersion deletes a specific version + its file. ErrEntryNotFound if not found.
+    RemoveVersion(profileID, bundleID, version string) error
 
     // CleanAll removes all IPA files + clears the index for the profile.
     // Returns the count of removed entries.
@@ -396,8 +405,7 @@ type Store interface {
 }
 
 // Entry is a single IPA record in the library index.
-// Unique by bundle_id within a profile (D-04 fix: v1 = one version per bundle-id;
-// downloading a new version replaces the old entry + deletes old file).
+// Unique by (bundle_id, version) composite key within a profile.
 type Entry struct {
     BundleID     string    `json:"bundle_id"`
     AppID        int64     `json:"app_id"`
@@ -408,17 +416,25 @@ type Entry struct {
 }
 ```
 
-**JSON 索引格式**（`<configRoot>/library/<profileID>/index.json`）：
+**JSON 索引格式**（`<configRoot>/library/<profileID>/index.json`，多版本示例）：
 ```json
 {
   "entries": [
     {
       "bundle_id": "com.tencent.xin",
       "app_id": 123456789,
+      "version": "8.0.35",
+      "file_path": "/Users/x/.ipa-manager/library/alice_example_com/com.tencent.xin_123456789_8.0.35.ipa",
+      "file_size": 240111222,
+      "downloaded_at": "2026-07-01T14:00:00Z"
+    },
+    {
+      "bundle_id": "com.tencent.xin",
+      "app_id": 123456789,
       "version": "8.0.34",
       "file_path": "/Users/x/.ipa-manager/library/alice_example_com/com.tencent.xin_123456789_8.0.34.ipa",
       "file_size": 234567890,
-      "downloaded_at": "2026-07-01T12:00:00Z"
+      "downloaded_at": "2026-07-01T10:00:00Z"
     }
   ]
 }
@@ -472,7 +488,7 @@ func (s *store) defaultIPAPath(profileID string, entry Entry) string {
 
 **理由**：
 - `<configRoot>/library/<profileID>/` 天然 per-profile 隔离（NFR-03）。
-- 文件名含 version——下载新版本时，library 索引更新为新版本条目并删除旧版本文件（D-04 fix：v1 一个 bundle-id 一个版本，不支持同 app 多版本共存）。
+- 文件名含 version——不同版本在磁盘上天然不冲突（多版本共存）。
 - 与 ipatool 的 `fileName()` 一致——降低认知负担。
 
 #### DD-04：Download 流程编排
@@ -654,6 +670,7 @@ library list
 
 library clean [bundle-id]
   --profile <id>          指定 profile
+  --version <ver>         仅清理指定版本（需配合 bundle-id 参数）
 ```
 
 **命令组结构**：`appCmd()` 返回的 cobra Command 有三个子命令：`appSearchCmd(deps)` / `appDownloadCmd(deps)` / `appsVersionsCmd()`（stub）。download 从 `install` 组完全移出，归入 `app` 组——search（发现）+ download（获取）对称归组。
@@ -952,22 +969,24 @@ func NewStore(libraryRoot string) Store
 
 ### 3.4 状态转换
 
-**Library entry 生命周期**：
+**Library entry 生命周期**（多版本）：
 ```
-                    download (success)
-  (不存在) ──────────────────────► INDEXED
-                                     │
-                                     │ library clean <bundle-id>
-                                     │ library clean (all)
-                                     ▼
-                                 (不存在)
+                     app download (success, version V)
+  (不存在 V) ──────────────────────────────────► INDEXED(V)
+                                                    │
+                                                    │ library clean <bid> --version V
+                                                    │ library clean <bid> (removes ALL versions)
+                                                    │ library clean (removes ALL)
+                                                    ▼
+                                                (不存在 V)
 
-  INDEXED + 文件被外部删除 ──► STALE (索引有但文件无)
+  下载版本 V2 时，已有的 V1 不受影响——两者共存于索引和磁盘。
+
+  INDEXED(V) + 文件被外部删除 ──► STALE(V) (索引有 V 但文件无)
                                      │
-                                     │ library clean <bundle-id> (AC-05-8)
-                                     │ library list (显示 + 标注 absent?)
+                                     │ library clean <bid> --version V (AC-05-8)
                                      ▼
-                                 (不存在)
+                                (不存在 V)
 ```
 
 **注**：`library list` 对 STALE 条目的行为——显示条目但 `file_path` 指向不存在的文件。设计选择：list 照常显示（用户可见索引记录），clean 时 AC-05-8 处理（幂等移除）。不在 list 中做文件存在性检查（避免每次 list 都 stat 全部文件，NFR-10）。
@@ -1149,10 +1168,11 @@ User: ipa-manager library list
   ├─ [libraryStore.List(profile.ID)] → []Entry
   │    └─ empty → "no IPAs in library for profile '<id>'" exit 0 (AC-04-2)
   │
-  └─ [lipgloss Table] render（D-07 fix: 含 PATH 列）:
+  └─ [lipgloss Table] render（多版本：每个 (bundle-id, version) 一行，按 bundle-id 然后 version 降序排列）:
        BUNDLE-ID         │ VERSION │ SIZE     │ DOWNLOADED          │ PATH
-       com.tencent.xin   │ 8.0.34  │ 234.5 MB │ 2026-07-01 12:00    │ ~/.ipa-manager/library/alice.../com.tencent.xin_123456789_8.0.34.ipa
-       com.example.app   │ unknown │ 45.6 MB  │ 2026-07-01 11:30    │ /tmp/custom/app.ipa
+       com.tencent.xin   │ 8.0.35  │ 240.1 MB │ 2026-07-01 14:00    │ ~/.ipa-manager/library/alice.../com.tencent.xin_123456789_8.0.35.ipa
+       com.tencent.xin   │ 8.0.34  │ 234.5 MB │ 2026-07-01 10:00    │ ~/.ipa-manager/library/alice.../com.tencent.xin_123456789_8.0.34.ipa
+       com.example.app   │ 1.2.3   │ 45.6 MB  │ 2026-07-01 09:00    │ /tmp/custom/app.ipa
       exit 0 (AC-04-1)
 ```
 
@@ -1179,26 +1199,37 @@ User: ipa-manager library clean
   └─ print "✓ Removed Ne IPA(s) + Na stale entries." exit 0 (AC-05-1)
 ```
 
-### 5.8 `library clean <bundle-id>` — File Already Absent（D-05 fix: stat before prompt）
+### 5.8 `library clean <bundle-id>` / `library clean <bundle-id> --version <v>` — Multi-version（D-05 fix + 多版本）
 
 ```
-User: ipa-manager library clean com.example.app
+User: ipa-manager library clean com.tencent.xin
+  │            （或 library clean com.tencent.xin --version 8.0.34）
   │
-  ├─ [libraryStore.Get(profile.ID, "com.example.app")] → Entry{FilePath:"/.../app.ipa"}
-  │    └─ not in index → "no IPA for '<bundle-id>'" exit 0 (AC-05-4)
+  ├─ [libraryStore.Get(profile.ID, "com.tencent.xin")] → []Entry
+  │    └─ empty → "no IPA for 'com.tencent.xin' in profile '<id>'" exit 0 (AC-05-4)
   │
-  ├─ [os.Stat(entry.FilePath)] → fileExists?（D-05 fix）
-  │    └─ NOT exists → remove index entry + "file already absent for '<bundle-id>'" exit 0 (AC-05-8)
-  │       (no confirmation needed — nothing to delete)
+  ├─ --version flag given?
+  │    └─ YES → [libraryStore.GetVersion(profile.ID, bid, version)] → single Entry
+  │    │         └─ not found → "no IPA for '<bid>' version '<v>'" exit 0
+  │    │         └─ found → entries = [single Entry]
+  │    └─ NO → entries = all versions (may be 1 or many)
   │
-  ├─ isInteractive()? → NO → "confirmation required in non-interactive mode" exit 1 (AC-05-9)
+  ├─ [stat each entry's FilePath] → partition existing vs absent（D-05 fix）
+  │    └─ all absent → remove all stale index entries + exit 0 (AC-05-8)
   │
-  ├─ [ui.Confirm("remove '<bundle-id>' (version <v>, <size>) at <path>? [y/N]")] → YES
+  ├─ isInteractive()? → NO (and some exist) → "confirmation required" exit 1 (AC-05-9)
   │
-  ├─ [libraryStore.Remove(profile.ID, "com.example.app")]
-  │    └─ delete file + remove index entry
+  ├─ print confirmation:
+  │    ├─ single version → "remove '<bid>' version <v> (<size>) at <path>? [y/N]"
+  │    └─ multiple versions → "remove all N version(s) of '<bid>'? [y/N]"
+  │         + 逐行列出每个版本（version + size + path if custom）
   │
-  └─ print "✓ Removed '<bundle-id>'." exit 0 (AC-05-3)
+  ├─ [ui.Confirm(...)]
+  │    ├─ YES → for each existing entry: delete file
+  │    │         + [Remove or RemoveVersion] clears index entries
+  │    └─ NO → "cancelled" exit 0
+  │
+  └─ print "✓ Removed N version(s) of '<bid>'." exit 0 (AC-05-3)
 ```
 
 ### 5.9 `library clean` — Non-interactive (destructive, R2-04 fix)
@@ -1294,7 +1325,7 @@ implementation 阶段能否不猜谜地推进？
 - [x] **错误路径有定义**：DD-08 错误映射表 + §5.10 失败路径汇总。
 - [x] **接口完整**：ProfileAppStore（+7 方法含 RefreshSession，D-01 fix）、library.Store（5 方法）、Deps（+LibraryStore）。
 - [x] **Token retry 可实现**：RefreshSession() 使用 adapter 缓存的 Password，不泄露到 CLI 层（D-01 fix）。
-- [x] **版本追踪已明确**：默认路径从文件名解析✓；自定义 --output 标记 "unknown"（D-02 fix）。
+- [x] **版本追踪已明确**：默认路径传目录给 ipatool → 从下载响应文件名解析版本；多版本共存（同 bundle-id 不同 version 各自独立条目）。
 - [x] **Skip 逻辑基于物理文件**：os.Stat(targetPath) 前置检查（D-03 fix）。
 - [x] **文件修改清单完整**：§4 列出每个新增/修改/不变文件。
 - [x] **Mock 策略确定**：DD-12 mockAppStore 扩展（slice 模式支持 retry，D-06 fix）。
