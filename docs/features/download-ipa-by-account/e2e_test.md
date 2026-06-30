@@ -55,6 +55,13 @@
 - **Then**: stderr 含 "no active profile" + "accounts use"；exit 1
 - **Pass**: err 含 "no active profile" AND err 含 "accounts use"
 
+#### E2E-002a / AC-01-2 — Search active profile not logged in（E-04 fix: 补充此变体）
+- **Type**: failure
+- **Given**: active profile 存在但 mockStore.HasCredentials=false
+- **When**: 运行 `apps search wechat`
+- **Then**: err 含 "has no credentials" + "auth login"；exit 1
+- **Pass**: err 含 "no credentials" AND err 含 "auth login"
+
 #### E2E-003 / AC-01-3 — Search zero results
 - **Type**: edge
 - **Given**: active profile 已登录；mockAppStore.Search 返回空 slice
@@ -287,6 +294,20 @@
 - **Then**: stdout 含 "already empty"；exit 0（no-op 不受非交互约束）
 - **Pass**: output 含 "already empty" AND exit 0
 
+#### E2E-034a / AC-05-9 — Library clean non-interactive specific bundle (file exists)
+- **Type**: failure（E-01 fix: 补充 specific-bundle 非交互覆盖）
+- **Given**: mockLibraryStore.Get 返回 Entry（文件存在）；isInteractive()=false
+- **When**: 运行 `library clean com.tencent.xin`（stdin 非 TTY）
+- **Then**: err 含 "confirmation required in non-interactive mode"；exit 1
+- **Pass**: err 含 "confirmation required"
+
+#### E2E-034b / AC-05-9 / AC-05-8 — Library clean non-interactive specific bundle (file absent)
+- **Type**: edge（E-01 fix: 非交互 + 文件不存在 = no-op）
+- **Given**: mockLibraryStore.Get 返回 Entry（FilePath 指向不存在文件）；isInteractive()=false
+- **When**: 运行 `library clean com.example.app`（stdin 非 TTY）
+- **Then**: stdout 含 "file already absent"；index 条目被移除；exit 0（无文件可删，不需确认）
+- **Pass**: output 含 "file already absent" AND exit 0
+
 ### US-08 — --profile flag（跨命令）
 
 #### E2E-035 / AC-08-1 — --profile not found
@@ -337,17 +358,17 @@
 
 #### E2E-041 / AC-10-2 — --output tracked in library list
 - **Type**: happy
-- **Given**: 之前用 --output 下载；mockLibraryStore 有该 Entry
+- **Given**: 之前用 --output 下载；mockLibraryStore 有该 Entry（FilePath = 自定义路径）
 - **When**: 运行 `library list`
-- **Then**: 该 IPA 出现在列表中（含自定义路径）
-- **Pass**: output 含该 bundle-id
+- **Then**: 该 IPA 出现在列表中（含自定义路径在 PATH 列）
+- **Pass**: output 含该 bundle-id AND mockLibraryStore.Get 返回的 Entry.FilePath == 自定义路径（L3 oracle）
 
 #### E2E-042 / AC-10-3 — --output already exists (no --force)
-- **Type**: edge
-- **Given**: mockLibraryStore.Get 返回已有 Entry；无 --force
-- **When**: 运行 `download com.tencent.xin --output /tmp/test.ipa`
-- **Then**: stdout 含 "already exists"；Download 未调用；exit 0
-- **Pass**: output 含 "already exists" AND mockAS.downloadCalls == 0
+- **Type**: edge（E-03 fix: 基于物理文件存在性，非索引）
+- **Given**: outputPath 物理文件已存在（temp file 预创建）；未传 --force
+- **When**: 运行 `download com.tencent.xin --output /tmp/existing.ipa`
+- **Then**: stdout 含 "already exists"；mockAppStore.Download **未**被调用；exit 0
+- **Pass**: output 含 "already exists" AND mockAS.downloadCalls == 0 AND exit 0
 
 #### E2E-043 / AC-10-4 — --output parent dir missing
 - **Type**: failure
@@ -431,6 +452,7 @@
 |-----|----|----|------|
 | E2E-001 | AC-01-1 | US-01 | happy |
 | E2E-002 | AC-01-2 | US-01 | failure |
+| E2E-002a | AC-01-2 | US-01 | failure (E-04 fix) |
 | E2E-003 | AC-01-3 | US-01 | edge |
 | E2E-004 | AC-01-4 | US-01 | edge |
 | E2E-005 | AC-01-5 | US-01/08 | happy |
@@ -463,6 +485,8 @@
 | E2E-032 | AC-05-8 | US-05 | edge |
 | E2E-033 | AC-05-9 (destructive) | US-05 | failure |
 | E2E-034 | AC-05-9 (no-op) | US-05 | edge |
+| E2E-034a | AC-05-9 | US-05 | failure (E-01 fix) |
+| E2E-034b | AC-05-9/08 | US-05 | edge (E-01 fix) |
 | E2E-035 | AC-08-1 | US-08 | failure |
 | E2E-036 | AC-08-2 | US-08 | failure |
 | E2E-037 | AC-08-3 | US-08 | happy |
@@ -496,3 +520,7 @@
 | US-10 | E2E-040~045 | ✓ 全覆盖 |
 
 **无未覆盖的 user story。**
+
+### 注：AC-08-1 跨命令覆盖说明（E-05 fix）
+
+AC-08-1 要求 `--profile <bad-id>` 在**所有命令**（search / download / library list / library clean）上报错。E2E-035 仅测试 download 的变体。其余三个命令的 `--profile` 解析共享同一 `resolveProfile()` helper（design DD-07），该 helper 的单元测试覆盖所有错误分支（not found / not logged in / no active）。因此 E2E 层不重复测试每个命令的 `--profile` 失败——`resolveProfile` 的单元测试（`helpers_test.go`）提供跨命令保证。
