@@ -1,6 +1,6 @@
 # Design — download-ipa-by-account
 
-> 本设计基于 `requirements.md`（47 AC / 11 NFR / 11 US）和 ipatool fork `v2.3.1-fix-auth.5` 源码实证。所有 ipatool API 签名均从 module cache 实际源码验证，非猜测。
+> 本设计基于 `requirements.md`（47 AC / 10 NFR / 11 US）和 ipatool fork `v2.3.1-fix-auth.5` 源码实证。所有 ipatool API 签名均从 module cache 实际源码验证，非猜测。
 
 ---
 
@@ -927,7 +927,7 @@ func (m *mockAppStore) RefreshSession() error {
 {
   "entries": [
     {
-      "bundle_id": "string (unique within profile)",
+      "bundle_id": "string (part of composite unique key (bundle_id, version) within profile)",
       "app_id": "int64",
       "version": "string",
       "file_path": "string (absolute path to .ipa)",
@@ -1231,8 +1231,7 @@ User: ipa-manager library clean com.tencent.xin
   │         + 逐行列出每个版本（version + size + path if custom）
   │
   ├─ [ui.Confirm(...)]
-  │    ├─ YES → for each existing entry: delete file
-  │    │         + [Remove or RemoveVersion] clears index entries
+  │    ├─ YES → for each existing entry: [Store.Remove or Store.RemoveVersion]（MV-02 fix: Store 负责删文件+清索引，CLI 不直接 os.Remove）
   │    └─ NO → "cancelled" exit 0
   │
   └─ print "✓ Removed N version(s) of '<bid>'." exit 0 (AC-05-3)
