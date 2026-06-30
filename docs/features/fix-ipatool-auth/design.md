@@ -61,7 +61,7 @@ The only change in this mission is the dependency source: `majd/ipatool/v2` → 
 - Semver-compatible (Go modules require valid semver for tagged releases).
 - `v2.3.1` signals it's post-v2.3.0.
 - `-fix-auth.N` pre-release suffix clearly identifies the purpose.
-- Initial tags `.1`–`.3` were consumed by checksum churn (force-pushing broke sum.golang.org's recorded checksums). Tag `.4` is the stable final tag with correct FORK_NOTES.md and a clean checksum. Future revisions increment to `.5`.
+- Initial tags `.1`–`.4` were consumed by checksum churn (force-pushing broke sum.golang.org) and wrong base (main HEAD keyring mismatch). Tag `.5` is the stable final tag: correct v2.3.0 base, correct FORK_NOTES.md, clean checksum.
 
 **Alternative considered**: Pseudo-version `v2.3.1-0.20260630000000-abcdef`. Rejected — unreadable, though valid. A named tag is more maintainable.
 
