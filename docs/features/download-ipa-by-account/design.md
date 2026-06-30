@@ -494,15 +494,23 @@ User: ipa-manager download <bundle-id>
   ├─ [appStore.Lookup(bundleID)] → app (AppInfo)
   │    └─ ✗ "app not found" → error + exit 1 (AC-02-4)
   │
-  ├─ [resolveOutputPath(profile, app, --output)]
-  │    ├─ --output given → validate path (DD-09) → use it
-  │    └─ no --output → library.defaultIPAPath(profile, app)
+  ├─ [resolveOutputPath(profile, app, --output)]（R2-02 fix: 传目录给 ipatool，不预算文件名）
+  │    ├─ --output given → validate path (DD-09) → use as-is (file or dir)
+  │    └─ no --output → OutputPath = library directory = "<configRoot>/library/<profileID>/"
+  │         （ipatool 的 resolveDestinationPath 检测到目录后会用下载响应中的版本生成文件名，
+  │          因此 --external-version-id 的版本也正确嵌入文件名）
   │
-  ├─ [os.Stat(outputPath)] → fileExists? (D-03 fix: physical file check, not just index)
+  ├─ [computeSkipCheckPath(outputPath, app)] → targetFileForStat
+  │    ├─ --output is dir or empty → targetFileForStat = "<dir>/<bundleID>_<appID>_<lookupVersion>.ipa"（近似检测，用于 skip 提示）
+  │    └─ --output is file → targetFileForStat = outputPath
+  │
+  ├─ [os.Stat(targetFileForStat)] → fileExists? (D-03/R2-03 fix: physical file check)
   │    ├─ exists AND not --force → "already exists: <path> (use --force to overwrite)" + exit 0 (AC-02-5, AC-10-3)
   │    └─ not exists OR --force → continue
   │
-  ├─ [appStore.Download(DownloadInput{...})] → downloadResult
+  ├─ [appStore.Download(DownloadInput{BundleID, AppID, OutputPath, Progress, ExternalVersionID})]
+  │    └─ ipatool 内部 resolveDestinationPath 用下载响应的版本生成最终文件名
+  │    → downloadResult{DestinationPath (含正确版本), Version (从文件名解析), Sinfs}
   │    ├─ ✗ ErrLicenseRequired → license retry (下方)
   │    ├─ ✗ ErrPasswordTokenExpired → token retry (下方)
   │    └─ ✗ other → error + exit 1
@@ -837,6 +845,7 @@ type mockAppStore struct {
     purchaseCalled   bool
     replicateSinfErr error
     refreshSessionErr error // D-01 fix
+    refreshSessionCalled bool // D-01 fix
 }
 
 // New methods — return configured values or zero values when not set.
@@ -874,6 +883,7 @@ func (m *mockAppStore) ReplicateSinf([]appstore.Sinf, string) error {
 }
 // D-01 fix: RefreshSession mock
 func (m *mockAppStore) RefreshSession() error {
+    m.refreshSessionCalled = true
     return m.refreshSessionErr
 }
 ```
@@ -1075,14 +1085,15 @@ User: ipa-manager download com.example.freeapp
   └─ print "✓ Downloaded: ..." exit 0 (AC-02-7)
 ```
 
-### 5.3 `download` — Token Expired (auto re-login)
+### 5.3 `download` — Token Expired (auto re-login, R2-01 fix)
 
 ```
   ├─ [appStore.Download(...)]
   │    └─ ✗ ErrPasswordTokenExpired
   │
-  ├─ [appStore.Login(LoginInput{Email: account.Email, Password: account.Password})]
-  │    └─ ✓ (re-authenticated, keychain updated by ipatool)
+  ├─ [appStore.RefreshSession()]  ← R2-01 fix: adapter-internal, uses cached Password
+  │    ├─ ✗ → "re-login failed" error + exit 1 (AC-02-10)
+  │    └─ ✓ → cached Account updated with fresh token
   │
   ├─ [appStore.Download(...)] → retry
   │    └─ → DownloadResult{...} ✓
@@ -1090,11 +1101,11 @@ User: ipa-manager download com.example.freeapp
   └─ continue to ReplicateSinf → Add → success (AC-02-10)
 ```
 
-### 5.4 `download` — Already Exists (skip)
+### 5.4 `download` — Already Exists (skip, R2-03 fix: os.Stat not index)
 
 ```
-  ├─ [libraryStore.Get(profileID, bundleID)]
-  │    └─ → Entry{Version:"8.0.34", FilePath:"..."} (found, same version)
+  ├─ [os.Stat(targetFileForStat)]  ← R2-03 fix: physical file existence
+  │    └─ → file exists (found on disk)
   │
   ├─ --force? → NO
   │
@@ -1185,16 +1196,21 @@ User: ipa-manager library clean com.example.app
   └─ print "✓ Removed '<bundle-id>'." exit 0 (AC-05-3)
 ```
 
-### 5.9 `library clean` — Non-interactive (destructive)
+### 5.9 `library clean` — Non-interactive (destructive, R2-04 fix)
 
 ```
 User: echo "" | ipa-manager library clean   (stdin is pipe, not TTY)
   │
-  ├─ [libraryStore.List(profile.ID)] → []Entry (N=3)
-  ├─ isInteractive()? → NO
+  ├─ [libraryStore.List(profile.ID)] → []Entry
+  │    └─ empty → "library is already empty" exit 0 (AC-05-2, no-op)
+  │
+  ├─ [stat each FilePath] → partition: Ne existing, Na absent（D-05）
+  │    └─ Ne == 0 (all absent) → remove stale index entries + exit 0 (no-op, no confirmation needed)
+  │
+  ├─ isInteractive()? → NO (and Ne > 0)
   │
   └─ print "confirmation required in non-interactive mode; cannot proceed"
-     exit 1 (AC-05-9)
+     exit 1 (AC-05-9, only when there ARE existing files to delete)
 ```
 
 ### 5.10 Failure Paths 汇总
