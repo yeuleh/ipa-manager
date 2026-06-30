@@ -43,17 +43,19 @@ The only change in this mission is the dependency source: `majd/ipatool/v2` → 
 
 ### Decision Record
 
-#### DD-01: Fork from upstream main HEAD, not v2.3.0 tag
+#### DD-01: Fork from upstream v2.3.0 tag, not main HEAD
 
-**Decision**: Fork from `majd/ipatool` main HEAD (`dcddce4`, 2026-05-26), then cherry-pick PR #493.
+**Decision**: Fork from `majd/ipatool` v2.3.0 tag (commit `19ffd1b`), then cherry-pick PR #493.
 
-**Rationale**: Main HEAD includes post-v2.3.0 fixes (e.g., commit `dcddce4` "Fix 429 rate limit handling and context key type mismatch" from PR #481). Starting from the latest main gives us those fixes for free. PR #493 applies cleanly to main (verified during spike — build + tests pass).
+**Rationale**: Main HEAD (`dcddce4`, 2026-05-26) switched from `github.com/99designs/keyring` to `github.com/byteness/keyring`, which is a breaking change for consumers that depend on `99designs/keyring` (like ipa-manager). Forking from v2.3.0 preserves the `99designs/keyring v1.2.1` dependency, enabling the "no application code changes" constraint (DD-04). PR #493 applies to v2.3.0 with a trivial conflict in `appstore_bag_test.go` (test additions at end of file) that resolves cleanly.
 
-**Alternative considered**: Fork from v2.3.0 tag. Rejected — would miss the 429 fix and require more manual patches later.
+**Alternative considered**: Fork from main HEAD. Rejected during execution — the `byteness/keyring` switch broke ipa-manager's adapter code (`internal/appstore/client_impl.go`), requiring application code changes. Forking from v2.3.0 avoids this entirely.
 
-#### DD-02: Tag as v2.3.1-fix-auth.4
+> **Execution note**: The initial design specified main HEAD. This was revised during T2 execution when the build failed with a keyring type mismatch. See T1 re-do commit for details.
 
-**Decision**: Tag the fork's patched commit as `v2.3.1-fix-auth.4`.
+#### DD-02: Tag as v2.3.1-fix-auth.5
+
+**Decision**: Tag the fork's patched commit as `v2.3.1-fix-auth.5`.
 
 **Rationale**:
 - Semver-compatible (Go modules require valid semver for tagged releases).
@@ -67,7 +69,7 @@ The only change in this mission is the dependency source: `majd/ipatool/v2` → 
 
 **Decision**:
 ```go
-replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-auth.4
+replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-auth.5
 ```
 
 **Rationale**:
@@ -94,7 +96,7 @@ replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-au
 **Decision**: Add a `FORK_NOTES.md` at the root of the fork repo (`yeuleh/ipatool`), and reference it from ipa-manager's `docs/features/fix-ipatool-auth/`.
 
 **Contents**:
-- Base commit: `majd/ipatool@dcddce4`
+- Base commit: `majd/ipatool@v2.3.0`
 - Applied patch: PR #493 commit `a98f833`
 - Purpose: Apple auth endpoint fix
 - Sync procedure: when upstream merges an equivalent fix, rebase onto upstream main and re-tag
@@ -129,7 +131,7 @@ The ipa-manager application's data models, state, and interfaces are unchanged. 
 
 | File         | Change                                                                                       |
 | ------------ | -------------------------------------------------------------------------------------------- |
-| `go.mod`     | Add `replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-auth.4`    |
+| `go.mod`     | Add `replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-auth.5`    |
 | `go.sum`     | Updated by `go mod tidy` (new checksums for the fork)                                         |
 
 ### Files NOT Modified (important)
@@ -149,7 +151,7 @@ The ipa-manager application's data models, state, and interfaces are unchanged. 
 | --------------------------------- | ---------------------------- |
 | GitHub fork                       | `github.com/yeuleh/ipatool`  |
 | Patched main branch               | fork's `main`                |
-| Tag                               | `v2.3.1-fix-auth.4`          |
+| Tag                               | `v2.3.1-fix-auth.5`          |
 | Fork documentation                | `FORK_NOTES.md` in fork root |
 
 ## 5. Processing Flows
@@ -175,7 +177,7 @@ The ipa-manager application's data models, state, and interfaces are unchanged. 
 │                                                                  │
 │  6. Write FORK_NOTES.md                                          │
 │                                                                  │
-│  7. Commit + tag: git tag v2.3.1-fix-auth.4                      │
+│  7. Commit + tag: git tag v2.3.1-fix-auth.5                      │
 │                                                                  │
 │  8. Push fork to github.com/yeuleh/ipatool                       │
 │                                                                  │
@@ -209,7 +211,7 @@ The ipa-manager application's data models, state, and interfaces are unchanged. 
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-### Failure Path: PR #493 doesn't apply cleanly to main HEAD
+### Failure Path: PR #493 doesn't apply cleanly to v2.3.0
 
 ```
 git cherry-pick a98f833 → CONFLICT
@@ -221,7 +223,7 @@ git cherry-pick a98f833 → CONFLICT
      → if still fails → ESCALATE (NEEDS CLARIFICATION: combine with PR #502?)
 ```
 
-**Likelihood**: LOW — spike verified clean application on main HEAD.
+**Likelihood**: LOW — spike verified clean application on v2.3.0 (trivial test-file conflict resolved).
 
 ### Failure Path: go mod tidy fails
 
@@ -250,6 +252,7 @@ go mod tidy → error
 ```
 1. Remove replace directive from go.mod
 2. Update require to upstream version with the fix (e.g., v2.4.0)
+   — must still use 99designs/keyring or ipa-manager adapter needs updating
 3. go mod tidy
 4. go build + go test
 5. Verify real login

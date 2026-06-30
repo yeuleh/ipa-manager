@@ -50,7 +50,7 @@ No parallel tracks. No Foundation tasks (T1 is a story task — it produces the 
 - Fork repo created from `majd/ipatool`
 - `main` branch with PR #493 cherry-picked (commit `a98f833`)
 - `FORK_NOTES.md` at fork root
-- Tag `v2.3.1-fix-auth.4`
+- Tag `v2.3.1-fix-auth.5`
 
 **Steps**:
 1. Fork `majd/ipatool` to `yeuleh/ipatool` via `gh repo fork` or GitHub UI.
@@ -59,25 +59,25 @@ No parallel tracks. No Foundation tasks (T1 is a story task — it produces the 
 4. `go generate ./...` (regenerate mocks).
 5. `go build ./...` — verify exit 0.
 6. `go test ./...` — verify all pass.
-7. Write `FORK_NOTES.md` with: base commit `majd/ipatool@dcddce4`, applied PR #493 commit `a98f833`, purpose, sync procedure.
+7. Write `FORK_NOTES.md` with: base commit `majd/ipatool@v2.3.0`, applied PR #493 commit `a98f833`, purpose, sync procedure.
 8. `git add FORK_NOTES.md && git commit -m "docs: FORK_NOTES — fork provenance and sync procedure"`
-9. `git tag v2.3.1-fix-auth.4`
+9. `git tag v2.3.1-fix-auth.5`
 10. `git push origin main --tags`
 
 **Acceptance command**:
 ```bash
 # Local verification
-cd ./temp/ipatool-spike && go build ./... && go test ./... && git tag --list v2.3.1-fix-auth.4 && test -f FORK_NOTES.md
+cd ./temp/ipatool-spike && go build ./... && go test ./... && git tag --list v2.3.1-fix-auth.5 && test -f FORK_NOTES.md
 # Remote verification (tag pushed and fetchable)
-cd ./temp/ipatool-spike && git ls-remote --tags origin v2.3.1-fix-auth.4 | grep v2.3.1-fix-auth.4
+cd ./temp/ipatool-spike && git ls-remote --tags origin v2.3.1-fix-auth.5 | grep v2.3.1-fix-auth.5
 # Go module fetchability (from ipa-manager repo)
-GOPROXY=direct go mod download github.com/yeuleh/ipatool/v2@v2.3.1-fix-auth.4 && echo "fetchable"
+GOPROXY=direct go mod download github.com/yeuleh/ipatool/v2@v2.3.1-fix-auth.5 && echo "fetchable"
 ```
 
 **Completion criteria**:
 - Spock review pass (fork has correct base + patch + tag + docs).
 - `go build ./...` and `go test ./...` pass in the fork.
-- Tag `v2.3.1-fix-auth.4` exists.
+- Tag `v2.3.1-fix-auth.5` exists.
 - `FORK_NOTES.md` exists and records all three items (base commit, applied PR, sync procedure).
 
 **Rollback note**: The fork repo is external. If created incorrectly, delete it on GitHub and recreate. No ipa-manager state is affected at this point.
@@ -100,7 +100,7 @@ GOPROXY=direct go mod download github.com/yeuleh/ipatool/v2@v2.3.1-fix-auth.4 &&
 - `go.sum` — updated by `go mod tidy`
 
 **Steps**:
-1. Edit `go.mod`: add `replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-auth.4`
+1. Edit `go.mod`: add `replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-auth.5`
 2. `go mod tidy` — updates go.sum with fork checksums.
 3. `go build ./...` — must succeed (E2E-001).
 4. `go build -o ./bin/ipa-manager ./cmd/ipa-manager` — build binary for T3.
@@ -201,7 +201,7 @@ grep "replace.*yeuleh/ipatool" go.mod
    - `go mod tidy` to restore correct go.sum.
 2. **Security audit** (E2E-009):
    - Part A: `git diff main...feature/fix-ipatool-auth` — audit diff body for personal data.
-   - Part B: diff fork main vs upstream `dcddce4` — audit for personal data beyond PR #493 content.
+   - Part B: diff fork main vs upstream v2.3.0 — audit for personal data beyond PR #493 content.
    - Verify: no Apple credentials, names, tokens, or 2FA codes in diff bodies.
 3. **Cleanup**:
    - Remove `./temp/ipatool-spike/` (per AGENTS.md CONVENTIONS — temp cleanup after task).
@@ -210,7 +210,7 @@ grep "replace.*yeuleh/ipatool" go.mod
 **Acceptance commands**:
 ```bash
 # Switch-back proof (E2E-008)
-sed -i.bak 's|yeuleh/ipatool/v2 v2.3.1-fix-auth.4|majd/ipatool/v2 v2.3.0|' go.mod && \
+sed -i.bak 's|yeuleh/ipatool/v2 v2.3.1-fix-auth.5|majd/ipatool/v2 v2.3.0|' go.mod && \
 go build ./... && go test ./... -count=1 && \
 mv go.mod.bak go.mod && go mod tidy
 
@@ -218,7 +218,7 @@ mv go.mod.bak go.mod && go mod tidy
 git diff main...feature/fix-ipatool-auth
 
 # Security audit Part B — fork diff vs upstream (E2E-009 Part B)
-cd ./temp/ipatool-spike && git diff dcddce4...HEAD
+cd ./temp/ipatool-spike && git diff 19ffd1b...HEAD
 
 # Cleanup
 rm -rf ./temp/
@@ -287,7 +287,7 @@ All user stories have at least one task. ✅
 
 | Risk                                          | Task    | Mitigation                                                                                         |
 | --------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------- |
-| PR #493 doesn't apply cleanly to main HEAD    | T1      | Spike-verified clean application. If conflict, resolve manually or rebase onto PR parent.          |
+| PR #493 doesn't apply cleanly to v2.3.0    | T1      | Spike-verified clean application. If conflict, resolve manually or rebase onto PR parent.          |
 | `go mod tidy` fails (checksum/version issues) | T2      | Verify fork tag is valid semver. `go mod download` + retry.                                         |
 | Real login fails (Apple changed again)        | T3      | Re-run spike with latest community PRs. Check if Apple endpoint moved further.                     |
 | Switch-back build fails (fork-specific API)   | T4      | Should not happen — adapter isolates ipatool. If it does, identify the API leak and refactor.       |
