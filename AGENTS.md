@@ -43,3 +43,13 @@
 2. **iOS 17+ 设备需 tunnel**：go-ios 对 iOS 17+ 设备需 `sudo ios tunnel start`；tunnel 协议随 iOS 版本演进（如 iOS 18.2 移除 QUIC）。设备侧能力稳定性取决于此。
 3. **Apple ID 自动化登录有理论风控风险**：个人小流量使用风险低，但非零。建议只用自己可接受风险的账号。
 <!-- mindtrek-bootstrap:end -->
+
+## CONVENTIONS
+
+<!-- planet-fall:preserve-start -->
+### Memo — 2026-06-30
+
+- 临时性脚本放在项目内 `./temp/` 目录，**不要**放系统 `/tmp`
+- `./temp/` 必须加入 `.gitignore`
+- 任务完成后清理 `./temp/`
+<!-- planet-fall:preserve-end -->

@@ -31,12 +31,14 @@ require (
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
-	github.com/danieljoos/wincred v1.1.2 // indirect
+	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/dvsekhvalnov/jose2go v1.7.0 // indirect
+	github.com/dvsekhvalnov/jose2go v1.8.0 // indirect
+	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/godbus/dbus v0.0.0-20190726142602-4481cbc300e2 // indirect
-	github.com/google/uuid v1.1.2 // indirect
+	github.com/google/go-cmp v0.7.0 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/grandcat/zeroconf v1.0.0 // indirect
 	github.com/gsterjov/go-libsecret v0.0.0-20161001094733-a6f4afe4910c // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
@@ -57,17 +59,19 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	go.mozilla.org/pkcs7 v0.9.0 // indirect
-	golang.org/x/crypto v0.36.0 // indirect
-	golang.org/x/mod v0.17.0 // indirect
-	golang.org/x/net v0.38.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
+	golang.org/x/crypto v0.49.0 // indirect
+	golang.org/x/mod v0.33.0 // indirect
+	golang.org/x/net v0.51.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/term v0.30.0 // indirect
-	golang.org/x/text v0.23.0 // indirect
-	golang.org/x/tools v0.21.1-0.20240508182429-e35e4ccd0d2d // indirect
+	golang.org/x/term v0.41.0 // indirect
+	golang.org/x/text v0.35.0 // indirect
+	golang.org/x/tools v0.42.0 // indirect
 	gopkg.in/errgo.v1 v1.0.1 // indirect
 	gopkg.in/retry.v1 v1.0.3 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	howett.net/plist v1.0.1 // indirect
 	software.sslmate.com/src/go-pkcs12 v0.7.0 // indirect
 )
+
+replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-auth.5
