@@ -10,7 +10,7 @@
 
 | US | 描述 | 设计覆盖 |
 |----|------|----------|
-| US-01 (P1) | 按名字搜索 App Store | DD-06 `apps search`，DD-01 Search 方法 |
+| US-01 (P1) | 按名字搜索 App Store | DD-06 `app search`，DD-01 Search 方法 |
 | US-02 (P1) | 下载 IPA 到本地 | DD-04 download 编排，DD-01 Download 方法 |
 | US-03 (P1) | per-account 隔离存储 | DD-03 library 路径布局，DD-02 LibraryStore |
 | US-04 (P1) | 列出已下载 IPA | DD-06 `library list`，DD-02 LibraryStore.List |
@@ -25,7 +25,7 @@
 
 - **不修改 ipatool fork 源码**——所有 Apple API 调用通过 adapter 隔离。
 - **不实现并发互斥**——同 profile 并发 download 行为未定义（继承 R3）。
-- **不做 `apps versions`**——列举历史版本是未来 mission。
+- **不做 `app versions`**——列举历史版本是未来 mission。
 - **不做设备侧操作**——`install push/uninstall/update` 是未来 mission。
 - **不引入新的外部库**——除 ipatool 已传递依赖的 `schollz/progressbar/v3`（已在 go.sum）。
 - **不做 library 自动清理策略**（LRU / 容量上限）——用户手动 clean。
@@ -40,7 +40,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        CLI Layer (internal/cli)                      │
-│  download.go   │  apps.go(search) │  library.go(list/clean)         │
+│  app_download.go   │  app.go(search) │  library.go(list/clean)         │
 │       │                │                     │                        │
 │       └────────────────┼─────────────────────┘                        │
 │                        ▼                                              │
@@ -477,11 +477,11 @@ func (s *store) defaultIPAPath(profileID string, entry Entry) string {
 
 #### DD-04：Download 流程编排
 
-**决策**：在 `internal/cli/download.go` 的 RunE 中编排完整下载流程。不使用 ipatool 的 retry-go，用显式错误分支（与 auth login 的两阶段模式一致）。
+**决策**：在 `internal/cli/app_download.go` 的 RunE 中编排完整下载流程。不使用 ipatool 的 retry-go，用显式错误分支（与 auth login 的两阶段模式一致）。
 
 **Happy Path**：
 ```
-User: ipa-manager download <bundle-id>
+User: ipa-manager app download <bundle-id>
   │
   ├─ [resolveProfile(deps, --profile)] → profile (DD-07)
   │    └─ ✗ not found / not logged in → error + exit 1
@@ -615,8 +615,8 @@ func NewProgress() Progress {
 
 | 命令 | 文件 | 说明 |
 |------|------|------|
-| `download <bundle-id>` | `internal/cli/download.go` (NEW) | 顶层命令（从 install 组移出） |
-| `apps search <term>` | `internal/cli/apps.go` (MODIFY) | 填实 search |
+| `app search <term>` | `internal/cli/app.go` (RENAME from apps.go) | `app` 组：search 子命令填实 |
+| `app download <bundle-id>` | `internal/cli/app_download.go` (NEW) | `app` 组：download 子命令（DD-04 编排） |
 | `library list` | `internal/cli/library.go` (NEW) | 列出 active profile 的 IPA |
 | `library clean [bundle-id]` | `internal/cli/library.go` (NEW) | 清理（全部/单 app） |
 
@@ -627,11 +627,10 @@ func newRootCmd(deps Deps) *cobra.Command {
     root.AddCommand(
         authCmd(deps),
         accountCmd(deps),
-        appsCmd(deps),         // ← 改为接收 deps
-        downloadCmd(deps),     // ← NEW 顶层
-        libraryCmd(deps),      // ← NEW
+        appCmd(deps),           // ← RENAMED from appsCmd; 含 search + download + versions 子命令
+        libraryCmd(deps),       // ← NEW
         devicesCmd(),
-        installCmd(),          // ← download 子命令移除
+        installCmd(),           // ← download 子命令移除（已在 app 组下）
         doctorCmd(),
     )
     return root
@@ -640,13 +639,13 @@ func newRootCmd(deps Deps) *cobra.Command {
 
 **Flags**：
 ```
-download <bundle-id>
+app download <bundle-id>
   --profile <id>          指定 profile（缺省 active）
   --output <path>         自定义输出路径
   --force                 强制覆盖已存在
   --external-version-id <id>  指定版本
 
-apps search <term>
+app search <term>
   --profile <id>          指定 profile
   --limit <N>             结果数上限（默认 5，与 ipatool 一致）
 
@@ -657,7 +656,7 @@ library clean [bundle-id]
   --profile <id>          指定 profile
 ```
 
-**`install download` 移除**：从 `installCmd()` 的 `AddCommand` 中移除 `installDownloadCmd()`。`install` 组仅保留 `push` / `uninstall` / `update`（均为 stub，未来 mission）。
+**命令组结构**：`appCmd()` 返回的 cobra Command 有三个子命令：`appSearchCmd(deps)` / `appDownloadCmd(deps)` / `appsVersionsCmd()`（stub）。download 从 `install` 组完全移出，归入 `app` 组——search（发现）+ download（获取）对称归组。
 
 #### DD-07：Profile 解析器（`--profile` flag 共享逻辑）
 
@@ -782,8 +781,8 @@ func isInteractive() bool {
 ```
 
 **使用点**：
-- `download` 的 license prompt（AC-02-11）：非交互 → 报错 exit 1
-- `download` 的 progress bar（DD-05）：非交互 → nil progress（无进度条）
+- `app download` 的 license prompt（AC-02-11）：非交互 → 报错 exit 1
+- `app download` 的 progress bar（DD-05）：非交互 → nil progress（无进度条）
 - `library clean` 的确认提示（AC-05-9）：非交互 + 有文件可删 → 报错 exit 1
 
 #### DD-11：Deps 扩展
@@ -892,7 +891,7 @@ func (m *mockAppStore) RefreshSession() error {
 **理由**：
 - 零值默认——auth 测试不配置新字段时，新方法返回零值（不 panic），编译通过，行为不变。
 - download/search 测试配置需要的字段，其他留零值。
-- 新增 `mockLibraryStore`（在 `library_test.go` 或 `download_test.go`）实现 `library.Store` 接口，同样用可配置字段。
+- 新增 `mockLibraryStore`（在 `library_test.go` 或 `app_download_test.go`）实现 `library.Store` 接口，同样用可配置字段。
 
 ---
 
@@ -987,8 +986,8 @@ func NewStore(libraryRoot string) Store
 | `internal/appstore/errors.go` (扩展) | `ErrLicenseRequired` / `ErrPasswordTokenExpired` 别名（映射 ipatool sentinels） |
 | `internal/library/store.go` | **完全重写**：`Store` 接口 + `store` 实现 + JSON 读写 + 文件管理 |
 | `internal/library/store_test.go` | Store 单元测试（temp dir 隔离） |
-| `internal/cli/download.go` | 顶层 `download` 命令 + DD-04 编排 |
-| `internal/cli/download_test.go` | download 命令测试（mock AppStore + mock LibraryStore） |
+| `internal/cli/app_download.go` | `app download` 命令 + DD-04 编排 |
+| `internal/cli/app_download_test.go` | download 命令测试（mock AppStore + mock LibraryStore） |
 | `internal/cli/library.go` | `library list` + `library clean` 命令 |
 | `internal/cli/library_test.go` | library 命令测试 |
 
@@ -1000,9 +999,9 @@ func NewStore(libraryRoot string) Store
 | `internal/appstore/client_impl.go` | 实现 6 个新 adapter 方法；adapter struct 加 `account *ipaappstore.Account` 缓存字段；`mapDownloadError` |
 | `internal/appstore/apps.go` | **删除** stub `Search` / `Download`（迁移到 adapter + cli 层）；保留包注释 |
 | `internal/library/ipa_store.go` | **删除**旧 stub（`IPAStore` struct / `Path` / `Add` / `List`），由 `store.go` 取代 |
-| `internal/cli/apps.go` | `appsCmd()` 改为接收 `deps Deps`；`appsSearchCmd()` 填实（DD-07 resolveProfile + Search） |
-| `internal/cli/install.go` | 移除 `installDownloadCmd()`；`installCmd()` 的 `AddCommand` 移除 download |
-| `internal/cli/root.go` | `appsCmd(deps)` 传参；新增 `downloadCmd(deps)` + `libraryCmd(deps)` |
+| `internal/cli/app.go` | **RENAME from apps.go**：`appCmd()` 改为返回 `app` 命令组（search + download + versions 子命令）；`appSearchCmd()` 填实（DD-07 resolveProfile + Search） |
+| `internal/cli/install.go` | 移除 `installDownloadCmd()`；`installCmd()` 的 `AddCommand` 移除 download（download 归入 `app` 组） |
+| `internal/cli/root.go` | `appCmd(deps)` 替换 `appsCmd()`；新增 `libraryCmd(deps)`；移除顶层 `downloadCmd` |
 | `internal/cli/deps.go` | `Deps` 加 `LibraryStore library.Store` 字段；`newProductionDeps` 加 `library.NewStore(paths.Library)` |
 | `internal/cli/helpers.go` | 新增 `resolveProfile()` (DD-07) + `validateOutputPath()` (DD-09) + `isInteractive()` (DD-10) |
 | `internal/cli/auth_test.go` | `mockAppStore` 扩展 6 个新方法（零值默认，DD-12） |
@@ -1027,7 +1026,7 @@ func NewStore(libraryRoot string) Store
 
 ## 5. Processing Flows
 
-### 5.1 `download <bundle-id>` — Happy Path
+### 5.1 `app download <bundle-id>` — Happy Path
 
 ```
 User: ipa-manager download com.tencent.xin
@@ -1065,7 +1064,7 @@ User: ipa-manager download com.tencent.xin
      exit 0 (AC-02-1)
 ```
 
-### 5.2 `download` — License Required (free app, interactive)
+### 5.2 `app download` — License Required (free app, interactive)
 
 ```
 User: ipa-manager download com.example.freeapp
@@ -1091,7 +1090,7 @@ User: ipa-manager download com.example.freeapp
   └─ print "✓ Downloaded: ..." exit 0 (AC-02-7)
 ```
 
-### 5.3 `download` — Token Expired (auto re-login, R2-01 fix)
+### 5.3 `app download` — Token Expired (auto re-login, R2-01 fix)
 
 ```
   ├─ [appStore.Download(...)]
@@ -1107,7 +1106,7 @@ User: ipa-manager download com.example.freeapp
   └─ continue to ReplicateSinf → Add → success (AC-02-10)
 ```
 
-### 5.4 `download` — Already Exists (skip, R2-03 fix: os.Stat not index)
+### 5.4 `app download` — Already Exists (skip, R2-03 fix: os.Stat not index)
 
 ```
   ├─ [os.Stat(targetFileForStat)]  ← R2-03 fix: physical file existence
@@ -1119,10 +1118,10 @@ User: ipa-manager download com.example.freeapp
      exit 0 (AC-02-5, idempotent)
 ```
 
-### 5.5 `apps search <term>` — Happy Path
+### 5.5 `app search <term>` — Happy Path
 
 ```
-User: ipa-manager apps search wechat --limit 5
+User: ipa-manager app search wechat --limit 5
   │
   ├─ [resolveProfile(deps, --profile="", requireCreds=true)]
   ├─ [factory(profile)] → appStore
@@ -1245,7 +1244,7 @@ User: echo "" | ipa-manager library clean   (stdin is pipe, not TTY)
 |------|------|------|
 | **ipatool 升级** | 中 | adapter 直接依赖 `ipaappstore.SearchInput` / `LookupInput` / `DownloadInput` / `AccountInfoOutput` 等签名。ipatool v2.x 内若改这些，编译断（adapter 有编译期接口断言 `var _ ProfileAppStore = (*profileAppStoreAdapter)(nil)`）。 |
 | **ProfileAppStore 接口扩展** | 低-中 | 现有 auth 测试的 `mockAppStore` 需加 6 个零值方法（DD-12）。机械修改，不改变 auth 测试逻辑。 |
-| **`install download` 移除** | 低 | v1 未发布，无外部用户影响。`install --help` 输出不再含 `download` 子命令。 |
+| **`install download` 移除** | 低 | v1 未发布，无外部用户影响。download 归入 `app` 组；`install --help` 输出不再含 `download` 子命令。 |
 | **progressbar 依赖** | 低 | 已在 go.sum（transitive），转 direct 仅 go.mod 变更。 |
 
 ### 6.2 迁移需求
