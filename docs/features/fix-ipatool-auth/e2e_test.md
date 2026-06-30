@@ -43,12 +43,12 @@ Validate that swapping the ipatool dependency to a forked version with PR #493 a
 | **ID**         | E2E-001                                        |
 | **Type**       | happy                                          |
 | **US/AC**      | US-02 / AC-02-1                                |
-| **Preconditions** | Fork tagged and pushed; go.mod updated with replace directive |
+| **Preconditions** | E2E-001 passed (go build succeeds); fork tagged and pushed |
 
 **Actions**:
-1. `go build ./...`
+1. `go build -o ./bin/ipa-manager ./cmd/ipa-manager`
 
-**Expected**: Exit code 0, no errors.
+**Expected**: Binary created at `./bin/ipa-manager`, exit code 0, no errors.
 
 **Pass/Fail**: Exit 0 = PASS.
 
@@ -118,7 +118,7 @@ Validate that swapping the ipatool dependency to a forked version with PR #493 a
 | **ID**         | E2E-005                                        |
 | **Type**       | happy                                          |
 | **US/AC**      | US-01 / AC-01-1                                |
-| **Preconditions** | Binary built (`./bin/ipa-manager`); keychain clean; valid Apple ID with 2FA |
+| **Preconditions** | Binary built (`./bin/ipa-manager` via E2E-001); keychain clean; valid Apple ID with 2FA |
 
 **Actions**:
 1. `./bin/ipa-manager auth login`
@@ -184,28 +184,36 @@ Validate that swapping the ipatool dependency to a forked version with PR #493 a
 3. `go test ./... -count=1`
 4. Restore the fork replace directive.
 
-**Expected**: Build succeeds and all tests pass with the upstream module — proving ipa-manager depends only on ipatool's public API, not fork-specific internals. (Login won't work with v2.3.0, but that's not what this case tests.)
+**Expected**: Build succeeds and all tests pass with the upstream module — proving ipa-manager depends only on ipatool's public API, not fork-specific internals. (This proves build/test compatibility only; login runtime behavior with v2.3.0 is not asserted here.)
 
 **Pass/Fail**: Build + test pass with upstream module = PASS. Restore fork directive after.
 
 ---
 
-### E2E-009 — No personal data in repository (security)
+### E2E-009 — No personal data in repositories (security)
 
 | Field          | Value                                          |
 | -------------- | ---------------------------------------------- |
 | **ID**         | E2E-009                                        |
 | **Type**       | NFR                                            |
 | **US/AC**      | NFR-04                                         |
-| **Preconditions** | All commits made                               |
+| **Preconditions** | All commits made on both repos                 |
 
 **Actions**:
-1. Audit all commits on `feature/fix-ipatool-auth`: `git log -p --all`
-2. Check for email addresses, names, tokens, passwords, or 2FA codes.
 
-**Expected**: No personal data in any commit. (Requirements.md spike result was redacted per Spock review.)
+**Part A — ipa-manager repo**:
+1. Audit introduced diff content on `feature/fix-ipatool-auth`: `git diff main...feature/fix-ipatool-auth`
+2. Check the diff (not git author metadata) for: Apple ID emails, account holder names, tokens, passwords, 2FA codes.
 
-**Pass/Fail**: No personal data found = PASS.
+**Part B — fork repo (`yeuleh/ipatool`)**:
+1. Audit introduced diff content: diff between fork main and upstream `dcddce4` (should be only PR #493 + `FORK_NOTES.md`).
+2. Check for any personal data beyond what PR #493 originally contains.
+
+**Scope note**: Git author/committer metadata (name/email in commit headers) is excluded from this audit — it is unavoidable commit attribution, not leaked Apple credential data. Only diff body content is checked.
+
+**Expected**: No Apple credentials, personal account data, tokens, or 2FA codes in any diff body in either repo.
+
+**Pass/Fail**: No personal data in diff bodies of either repo = PASS.
 
 ---
 

@@ -85,6 +85,10 @@ replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-au
 
 **Verification**: `git diff` after the swap should show only `go.mod` + `go.sum`.
 
+**Alternatives considered**:
+- Change all import paths to `github.com/yeuleh/ipatool/v2` directly. Rejected — would require editing every importing file and breaks the clean switch-back path (US-03).
+- Vendor the dependency. Rejected — bloats the repo and complicates upstream sync.
+
 #### DD-05: Fork documentation location
 
 **Decision**: Add a `FORK_NOTES.md` at the root of the fork repo (`yeuleh/ipatool`), and reference it from ipa-manager's `docs/features/fix-ipatool-auth/`.
@@ -96,6 +100,22 @@ replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-au
 - Sync procedure: when upstream merges an equivalent fix, rebase onto upstream main and re-tag
 
 **Rationale**: NFR-03 requires documenting the fork's provenance and sync procedure. Placing it in the fork repo (not ipa-manager) makes it discoverable by anyone who encounters the fork.
+
+**Alternatives considered**:
+- Document in ipa-manager's `docs/` only. Rejected — a fork discoverer on GitHub wouldn't find it.
+- Document in both repos. Rejected — duplication risk; the fork repo is the canonical location, ipa-manager references it.
+
+#### DD-06: Select PR #493 as the fix (R1 mitigation)
+
+**Decision**: Apply PR #493 ("Fix dynamic App Store auth endpoint discovery") as the fix, and no other PR.
+
+**Rationale**: The spike verified that PR #493 alone makes real Apple login succeed. PR #493 also provides structural mitigation for R1 (Apple changing endpoints again): it includes dynamic endpoint discovery (reading the new `authenticateAccount` field from the Bag response) and retry-with-discovered-endpoint logic (extracting the new URL from a non-plist response body). This makes the auth flow resilient to future endpoint moves, not just the current one.
+
+**Alternatives considered**:
+- Wait for upstream to merge. Rejected — maintainer unresponsive (7 PRs open since Jun 10, zero merges as of Jun 30). Blocks all account functionality indefinitely.
+- Apply PR #500 (serialNumber / FailureType 5002) in addition. Rejected — spike verified #493 is sufficient; adding #500 increases complexity without verified benefit.
+- Apply PR #502 (Content-Type change + /fast/ suffix). Rejected — overlaps with #493's normalization logic; combining risks conflicts.
+- Local patch without PR reference. Rejected — loses provenance and makes upstream sync harder.
 
 ## 3. Data Models / State / Interfaces
 
@@ -175,7 +195,7 @@ The ipa-manager application's data models, state, and interfaces are unchanged. 
 │  12. go test ./... -count=1                                      │
 │      → 69 tests, 0 failures                                      │
 │                                                                  │
-│  13. go build -o ./bin/ipa-manager ./                             │
+│  13. go build -o ./bin/ipa-manager ./cmd/ipa-manager              │
 │                                                                  │
 │  14. ./bin/ipa-manager auth login (interactive, real Apple ID)   │
 │      → success=true                                              │
