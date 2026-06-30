@@ -2,7 +2,7 @@
 
 ## 1. Full E2E Results (Independent Re-verification)
 
-All cases re-run fresh in validate phase. Manual E2E (005-007) reference execution evidence — no code changed between execution and validate.
+All cases re-run fresh in validate phase, including interactive E2E-005/006/007 (two full login → list → logout cycles against live Apple servers).
 
 | E2E     | Type       | Result | Evidence (validate-phase)                                                                                          |
 | ------- | ---------- | ------ | ------------------------------------------------------------------------------------------------------------------ |
