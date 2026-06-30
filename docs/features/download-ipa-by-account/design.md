@@ -106,6 +106,12 @@ type ProfileAppStore interface {
     Download(input DownloadInput) (DownloadResult, error)
     Purchase(bundleID string, appID int64, price float64) error
     ReplicateSinf(sinfs []Sinf, packagePath string) error
+
+    // --- NEW: reauth (D-01 fix) ---
+    // RefreshSession re-authenticates using the cached Account's stored Password.
+    // Must be called after AccountInfo(). Used for token-expired retry (AC-02-10).
+    // Does NOT expose Password to callers (NFR-04).
+    RefreshSession() error
 }
 ```
 
@@ -225,8 +231,10 @@ func (a *profileAppStoreAdapter) Download(input DownloadInput) (DownloadResult, 
     }
     var pb *progressbar.ProgressBar
     if input.Progress != nil {
-        // unwrap our Progress to *progressbar.ProgressBar (DD-05)
-        pb = input.Progress.(*progressBarWrapper).inner
+        // D-08 fix: safe type assertion, not unchecked cast
+        if w, ok := input.Progress.(*progressBarWrapper); ok {
+            pb = w.inner
+        }
     }
     out, err := a.inner.Download(ipaappstore.DownloadInput{
         Account:           *a.account,
@@ -240,9 +248,25 @@ func (a *profileAppStoreAdapter) Download(input DownloadInput) (DownloadResult, 
     }
     return DownloadResult{
         DestinationPath: out.DestinationPath,
-        Version:         extractVersionFromPath(out.DestinationPath),
+        Version:         extractVersionFromPath(out.DestinationPath), // D-02 fix: parse from filename, "unknown" fallback
         Sinfs:           sinfsToOur(out.Sinfs),
     }, nil
+}
+
+// extractVersionFromPath parses the version from an ipatool-generated filename.
+// ipatool's resolveDestinationPath generates: <bundleID>_<appID>_<version>.ipa
+// where <version> comes from the download response metadata (NOT Lookup).
+// For custom --output paths that don't follow this convention, returns "unknown".
+// D-02 fix: this is reliable for default library paths AND --external-version-id
+// (ipatool embeds the actual downloaded version in the filename regardless).
+func extractVersionFromPath(path string) string {
+    base := filepath.Base(path)
+    name := strings.TrimSuffix(base, ".ipa")
+    parts := strings.Split(name, "_")
+    if len(parts) >= 3 {
+        return parts[len(parts)-1]
+    }
+    return "unknown"
 }
 
 func (a *profileAppStoreAdapter) Purchase(bundleID string, appID int64, price float64) error {
@@ -264,6 +288,28 @@ func (a *profileAppStoreAdapter) ReplicateSinf(sinfs []Sinf, packagePath string)
         Sinfs:       ipaSinfs,
         PackagePath: packagePath,
     })
+}
+
+// RefreshSession re-authenticates using the cached Account's Password (D-01 fix).
+// Used for token-expired retry (AC-02-10). Password never leaves the adapter.
+func (a *profileAppStoreAdapter) RefreshSession() error {
+    if a.account == nil {
+        return fmt.Errorf("AccountInfo must be called before RefreshSession")
+    }
+    bag, err := a.inner.Bag(ipaappstore.BagInput{})
+    if err != nil {
+        return fmt.Errorf("failed to get auth endpoint for re-login: %w", err)
+    }
+    output, err := a.inner.Login(ipaappstore.LoginInput{
+        Email:    a.account.Email,
+        Password: a.account.Password,
+        Endpoint: bag.AuthEndpoint,
+    })
+    if err != nil {
+        return err
+    }
+    a.account = &output.Account // update cached account with fresh token
+    return nil
 }
 ```
 
@@ -350,6 +396,8 @@ type Store interface {
 }
 
 // Entry is a single IPA record in the library index.
+// Unique by bundle_id within a profile (D-04 fix: v1 = one version per bundle-id;
+// downloading a new version replaces the old entry + deletes old file).
 type Entry struct {
     BundleID     string    `json:"bundle_id"`
     AppID        int64     `json:"app_id"`
@@ -424,7 +472,7 @@ func (s *store) defaultIPAPath(profileID string, entry Entry) string {
 
 **理由**：
 - `<configRoot>/library/<profileID>/` 天然 per-profile 隔离（NFR-03）。
-- 文件名含 version——同一 app 不同版本不冲突（`--external-version-id` 场景）。
+- 文件名含 version——下载新版本时，library 索引更新为新版本条目并删除旧版本文件（D-04 fix：v1 一个 bundle-id 一个版本，不支持同 app 多版本共存）。
 - 与 ipatool 的 `fileName()` 一致——降低认知负担。
 
 #### DD-04：Download 流程编排
@@ -450,8 +498,8 @@ User: ipa-manager download <bundle-id>
   │    ├─ --output given → validate path (DD-09) → use it
   │    └─ no --output → library.defaultIPAPath(profile, app)
   │
-  ├─ [libraryStore.Get(profile.ID, bundleID)] → existing?
-  │    ├─ exists AND same version AND not --force → "already exists" + exit 0 (AC-02-5)
+  ├─ [os.Stat(outputPath)] → fileExists? (D-03 fix: physical file check, not just index)
+  │    ├─ exists AND not --force → "already exists: <path> (use --force to overwrite)" + exit 0 (AC-02-5, AC-10-3)
   │    └─ not exists OR --force → continue
   │
   ├─ [appStore.Download(DownloadInput{...})] → downloadResult
@@ -489,13 +537,13 @@ Download returns ErrLicenseRequired:
        └─ ✗ → error + exit 1
 ```
 
-**Token Expired Retry 子流程**（AC-02-10）：
+**Token Expired Retry 子流程**（AC-02-10，D-01 fix）：
 ```
 Download returns ErrPasswordTokenExpired:
   │
-  ├─ [appStore.Login(LoginInput{Email: account.Email, Password: account.Password})]
+  ├─ [appStore.RefreshSession()]  ← D-01 fix: adapter-internal re-login using cached Password
   │    ├─ ✗ → "re-login failed" error + exit 1 (AC-02-10)
-  │    └─ ✓ → acc updated
+  │    └─ ✓ → cached Account updated with fresh token
   │
   └─ [appStore.Download(DownloadInput{...})] → retry download
        ├─ ✗ → error + exit 1
@@ -781,13 +829,14 @@ type mockAppStore struct {
     searchResults     []appstore.AppInfo
     searchErr         error
 
-    // --- NEW: download fields ---
-    downloadResult   appstore.DownloadResult
-    downloadErr      error
-    downloadCalls    int
+    // --- NEW: download fields (D-06 fix: slices for retry modeling) ---
+    downloadResults []appstore.DownloadResult
+    downloadErrors  []error
+    downloadCalls   int
     purchaseErr      error
     purchaseCalled   bool
     replicateSinfErr error
+    refreshSessionErr error // D-01 fix
 }
 
 // New methods — return configured values or zero values when not set.
@@ -802,9 +851,19 @@ func (m *mockAppStore) Lookup(string) (appstore.AppInfo, error) {
 func (m *mockAppStore) Search(string, int64) ([]appstore.AppInfo, error) {
     return m.searchResults, m.searchErr
 }
+// D-06 fix: per-call indexing like login, supports retry (first fail, second succeed)
 func (m *mockAppStore) Download(appstore.DownloadInput) (appstore.DownloadResult, error) {
+    idx := m.downloadCalls
     m.downloadCalls++
-    return m.downloadResult, m.downloadErr
+    var result appstore.DownloadResult
+    var err error
+    if idx < len(m.downloadResults) {
+        result = m.downloadResults[idx]
+    }
+    if idx < len(m.downloadErrors) {
+        err = m.downloadErrors[idx]
+    }
+    return result, err
 }
 func (m *mockAppStore) Purchase(string, int64, float64) error {
     m.purchaseCalled = true
@@ -812,6 +871,10 @@ func (m *mockAppStore) Purchase(string, int64, float64) error {
 }
 func (m *mockAppStore) ReplicateSinf([]appstore.Sinf, string) error {
     return m.replicateSinfErr
+}
+// D-01 fix: RefreshSession mock
+func (m *mockAppStore) RefreshSession() error {
+    return m.refreshSessionErr
 }
 ```
 
@@ -1070,14 +1133,14 @@ User: ipa-manager library list
   ├─ [libraryStore.List(profile.ID)] → []Entry
   │    └─ empty → "no IPAs in library for profile '<id>'" exit 0 (AC-04-2)
   │
-  └─ [lipgloss Table] render:
-       BUNDLE-ID         │ VERSION │ SIZE     │ DOWNLOADED
-       com.tencent.xin   │ 8.0.34  │ 234.5 MB │ 2026-07-01 12:00
-       com.example.app   │ 1.2.3   │ 45.6 MB  │ 2026-07-01 11:30
+  └─ [lipgloss Table] render（D-07 fix: 含 PATH 列）:
+       BUNDLE-ID         │ VERSION │ SIZE     │ DOWNLOADED          │ PATH
+       com.tencent.xin   │ 8.0.34  │ 234.5 MB │ 2026-07-01 12:00    │ ~/.ipa-manager/library/alice.../com.tencent.xin_123456789_8.0.34.ipa
+       com.example.app   │ unknown │ 45.6 MB  │ 2026-07-01 11:30    │ /tmp/custom/app.ipa
       exit 0 (AC-04-1)
 ```
 
-### 5.7 `library clean` (no args) — Happy Path
+### 5.7 `library clean` (no args) — Happy Path（D-05 fix: stat before prompt）
 
 ```
 User: ipa-manager library clean
@@ -1086,29 +1149,40 @@ User: ipa-manager library clean
   ├─ [libraryStore.List(profile.ID)] → []Entry (N=3, M=1 custom path)
   │    └─ empty → "library is already empty" exit 0 (AC-05-2)
   │
-  ├─ isInteractive()? → YES
-  ├─ print "remove all 3 IPA(s) for profile 'alice_example_com'? [y/N]"
-  │        "  - /Users/x/custom/app.ipa"   ← 披露自定义路径 (AC-05-1, R2-F-01)
-  ├─ [ui.Confirm(...)]
-  │    └─ YES
+  ├─ [stat each entry's FilePath] → partition into existing(Ne) vs absent(Na)（D-05 fix）
+  │    └─ Ne == 0 (all absent) → remove all index entries + "removed Na stale entries" exit 0
   │
-  ├─ [libraryStore.CleanAll(profile.ID)] → count=3
-  └─ print "✓ Removed 3 IPA(s)." exit 0 (AC-05-1)
+  ├─ isInteractive()? → NO (and Ne > 0) → "confirmation required in non-interactive mode" exit 1 (AC-05-9)
+  ├─ print "remove all Ne existing IPA(s) for profile '<id>'? [y/N]"
+  │        (+ list custom-output paths if any)   ← 披露自定义路径 (AC-05-1, R2-F-01)
+  │        (+ "Na stale index entries will also be removed")
+  ├─ [ui.Confirm(...)]
+  │    └─ YES → [libraryStore.CleanAll(profile.ID)] → removes files + clears index
+  │    └─ NO → "cancelled" exit 0
+  │
+  └─ print "✓ Removed Ne IPA(s) + Na stale entries." exit 0 (AC-05-1)
 ```
 
-### 5.8 `library clean <bundle-id>` — File Already Absent
+### 5.8 `library clean <bundle-id>` — File Already Absent（D-05 fix: stat before prompt）
 
 ```
 User: ipa-manager library clean com.example.app
   │
   ├─ [libraryStore.Get(profile.ID, "com.example.app")] → Entry{FilePath:"/.../app.ipa"}
-  ├─ [ui.Confirm("remove 'com.example.app' (version 1.2.3, 45.6 MB)? [y/N]")] → YES
+  │    └─ not in index → "no IPA for '<bundle-id>'" exit 0 (AC-05-4)
+  │
+  ├─ [os.Stat(entry.FilePath)] → fileExists?（D-05 fix）
+  │    └─ NOT exists → remove index entry + "file already absent for '<bundle-id>'" exit 0 (AC-05-8)
+  │       (no confirmation needed — nothing to delete)
+  │
+  ├─ isInteractive()? → NO → "confirmation required in non-interactive mode" exit 1 (AC-05-9)
+  │
+  ├─ [ui.Confirm("remove '<bundle-id>' (version <v>, <size>) at <path>? [y/N]")] → YES
   │
   ├─ [libraryStore.Remove(profile.ID, "com.example.app")]
-  │    └─ os.Remove(FilePath) → os.IsNotExist (file already gone externally)
-  │    └─ remove index entry anyway
+  │    └─ delete file + remove index entry
   │
-  └─ print "file already absent for 'com.example.app'" exit 0 (AC-05-8, idempotent)
+  └─ print "✓ Removed '<bundle-id>'." exit 0 (AC-05-3)
 ```
 
 ### 5.9 `library clean` — Non-interactive (destructive)
@@ -1189,17 +1263,20 @@ User: echo "" | ipa-manager library clean   (stdin is pipe, not TTY)
 
 ---
 
-## 7. Design Completeness Self-Check
+## 8. Design Completeness Self-Check
 
 implementation 阶段能否不猜谜地推进？
 
-- [x] **每个 ipatool API 已验证**：AccountInfo / Lookup / Search / Download / Purchase / ReplicateSinf —— 全部从 `v2.3.1-fix-auth.5` 源码读到，签名非猜测。
+- [x] **每个 ipatool API 已验证**：AccountInfo / Lookup / Search / Download / Purchase / ReplicateSinf / Bag —— 全部从 `v2.3.1-fix-auth.5` 源码读到，签名非猜测。
 - [x] **数据格式确定**：index.json schema（DD-02）、IPA 文件名规则（DD-03）、路径布局。
-- [x] **每个 AC 有对应处理流**：§5 的 10 个流程图覆盖 42 个 AC 的所有 Then 子句。
+- [x] **每个 AC 有对应处理流**：§5 的流程图覆盖 42 个 AC 的所有 Then 子句。
 - [x] **错误路径有定义**：DD-08 错误映射表 + §5.10 失败路径汇总。
-- [x] **接口完整**：ProfileAppStore（+6 方法）、library.Store（5 方法）、Deps（+LibraryStore）。
+- [x] **接口完整**：ProfileAppStore（+7 方法含 RefreshSession，D-01 fix）、library.Store（5 方法）、Deps（+LibraryStore）。
+- [x] **Token retry 可实现**：RefreshSession() 使用 adapter 缓存的 Password，不泄露到 CLI 层（D-01 fix）。
+- [x] **版本追踪已明确**：默认路径从文件名解析✓；自定义 --output 标记 "unknown"（D-02 fix）。
+- [x] **Skip 逻辑基于物理文件**：os.Stat(targetPath) 前置检查（D-03 fix）。
 - [x] **文件修改清单完整**：§4 列出每个新增/修改/不变文件。
-- [x] **Mock 策略确定**：DD-12 mockAppStore 扩展方案。
+- [x] **Mock 策略确定**：DD-12 mockAppStore 扩展（slice 模式支持 retry，D-06 fix）。
 - [x] **无 "TODO: figure out"**：所有设计点都有决策 + 理由 + 备选。
 
 → 可进入 plan 阶段做任务分解。
