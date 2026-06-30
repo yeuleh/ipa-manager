@@ -129,7 +129,7 @@
 
 #### E2E-012 / AC-02-6 — Download already exists with --force
 - **Type**: edge
-- **Given**: mockLibraryStore.Get 返回已有 Entry；有 --force
+- **Given**: outputPath 物理文件已存在（预创建 temp file）；有 --force（R4 fix: 与 os.Stat skip 一致）
 - **When**: 运行 `download com.tencent.xin --force`
 - **Then**: mockAppStore.Download 被调用（重新下载）；exit 0
 - **Pass**: mockAS.downloadCalls == 1 AND exit 0
