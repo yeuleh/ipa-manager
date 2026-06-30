@@ -122,7 +122,7 @@
 
 #### E2E-011 / AC-02-5 — Download already exists (skip)
 - **Type**: edge
-- **Given**: mockLibraryStore.Get 返回已有 Entry（同版本）；无 --force
+- **Given**: outputPath 物理文件已存在（预创建 temp file）；无 --force（R2-03 fix: 基于物理文件）
 - **When**: 运行 `download com.tencent.xin`
 - **Then**: stdout 含 "already exists"；mockAppStore.Download **未**被调用；exit 0
 - **Pass**: output 含 "already exists" AND mockAS.downloadCalls == 0 AND exit 0
@@ -164,10 +164,10 @@
 
 #### E2E-017 / AC-02-10 — Download token expired (auto re-login)
 - **Type**: happy
-- **Given**: mockAppStore.Download 第一次返回 ErrPasswordTokenExpired；Login 成功；Download 第二次成功
+- **Given**: mockAppStore.Download 第一次返回 ErrPasswordTokenExpired；RefreshSession 成功（R2-01 fix）；Download 第二次成功
 - **When**: 运行 `download com.tencent.xin`
-- **Then**: mockAppStore.Login 被调用（重登录）；Download 重试成功；exit 0
-- **Pass**: mockAS.loginCalls >= 1 AND mockAS.downloadCalls == 2 AND exit 0
+- **Then**: mockAppStore.RefreshSession 被调用；Download 重试成功；exit 0
+- **Pass**: mockAS.refreshSessionCalled == true AND mockAS.downloadCalls == 2 AND exit 0
 
 #### E2E-018 / AC-02-11 — Download license required (non-interactive)
 - **Type**: failure
@@ -198,8 +198,8 @@
 - **Type**: happy
 - **Given**: mockLibraryStore.List 返回 2 个 Entry
 - **When**: 运行 `library list`
-- **Then**: stdout 含表格（Bundle-ID / Version / Size / Downloaded-At）；exit 0
-- **Pass**: output 含两个 bundle-id AND exit 0
+- **Then**: stdout 含表格（Bundle-ID / Version / Size / Downloaded-At / PATH 列）；exit 0
+- **Pass**: output 含两个 bundle-id AND output 含 "PATH" AND exit 0
 
 #### E2E-022 / AC-04-2 — Library list empty
 - **Type**: edge
@@ -361,7 +361,7 @@
 - **Given**: 之前用 --output 下载；mockLibraryStore 有该 Entry（FilePath = 自定义路径）
 - **When**: 运行 `library list`
 - **Then**: 该 IPA 出现在列表中（含自定义路径在 PATH 列）
-- **Pass**: output 含该 bundle-id AND mockLibraryStore.Get 返回的 Entry.FilePath == 自定义路径（L3 oracle）
+- **Pass**: output 含该 bundle-id AND mockLibraryStore.List 返回的 Entry.FilePath == 自定义路径（L3 oracle）
 
 #### E2E-042 / AC-10-3 — --output already exists (no --force)
 - **Type**: edge（E-03 fix: 基于物理文件存在性，非索引）
@@ -486,7 +486,7 @@
 | E2E-033 | AC-05-9 (destructive) | US-05 | failure |
 | E2E-034 | AC-05-9 (no-op) | US-05 | edge |
 | E2E-034a | AC-05-9 | US-05 | failure (E-01 fix) |
-| E2E-034b | AC-05-9/08 | US-05 | edge (E-01 fix) |
+| E2E-034b | AC-05-9 / AC-05-8 | US-05 | edge (E-01 fix) |
 | E2E-035 | AC-08-1 | US-08 | failure |
 | E2E-036 | AC-08-2 | US-08 | failure |
 | E2E-037 | AC-08-3 | US-08 | happy |
