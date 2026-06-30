@@ -66,7 +66,12 @@ No parallel tracks. No Foundation tasks (T1 is a story task — it produces the 
 
 **Acceptance command**:
 ```bash
+# Local verification
 cd ./temp/ipatool-spike && go build ./... && go test ./... && git tag --list v2.3.1-fix-auth.1 && test -f FORK_NOTES.md
+# Remote verification (tag pushed and fetchable)
+cd ./temp/ipatool-spike && git ls-remote --tags origin v2.3.1-fix-auth.1 | grep v2.3.1-fix-auth.1
+# Go module fetchability (from ipa-manager repo)
+GOPROXY=direct go mod download github.com/yeuleh/ipatool/v2@v2.3.1-fix-auth.1 && echo "fetchable"
 ```
 
 **Completion criteria**:
@@ -149,7 +154,21 @@ grep "replace.*yeuleh/ipatool" go.mod
 5. Run `./bin/ipa-manager accounts list` again:
    - Verify: profile shows as logged-out.
 
-**Acceptance**: Manual verification — login succeeds, list shows profile, logout revokes session.
+**Acceptance commands** (manual interactive — record actual output):
+```bash
+# E2E-005: real login (interactive — enter email/password/2FA)
+./bin/ipa-manager auth login
+# Expected: success=true, account info displayed
+
+# E2E-006: list shows logged-in profile
+./bin/ipa-manager accounts list
+# Expected: profile shows as logged-in with correct name
+
+# E2E-007: logout revokes session
+./bin/ipa-manager auth logout
+./bin/ipa-manager accounts list
+# Expected: logout succeeds, profile shows logged-out
+```
 
 **Completion criteria**:
 - Spock review pass (E2E results documented in validate.md).
@@ -190,15 +209,22 @@ grep "replace.*yeuleh/ipatool" go.mod
 
 **Acceptance commands**:
 ```bash
-# Switch-back proof
+# Switch-back proof (E2E-008)
 sed -i.bak 's|yeuleh/ipatool/v2 v2.3.1-fix-auth.1|majd/ipatool/v2 v2.3.0|' go.mod && \
 go build ./... && go test ./... -count=1 && \
-mv go.mod.bak go.mod && go mod tidy && \
-# Audit
-git diff main...feature/fix-ipatool-auth && \
+mv go.mod.bak go.mod && go mod tidy
+
+# Security audit Part A — ipa-manager diff (E2E-009 Part A)
+git diff main...feature/fix-ipatool-auth
+
+# Security audit Part B — fork diff vs upstream (E2E-009 Part B)
+cd ./temp/ipatool-spike && git diff dcddce4...HEAD
+
 # Cleanup
 rm -rf ./temp/
 ```
+
+**Bundling justification**: Switch-back proof (E2E-008), security audit (E2E-009), and temp cleanup are all post-implementation validation/housekeeping activities with no code changes. Each takes < 5 minutes. Splitting would create sub-task-sized units (e.g., "diff audit + rm -rf") that don't warrant independent Spock review. They are bundled as the mission's final validation gate.
 
 **Completion criteria**:
 - Spock review pass (switch-back proved, audit clean, temp cleaned).
@@ -270,13 +296,15 @@ All user stories have at least one task. ✅
 
 ## 6. Pre-Execution Baseline
 
+Captured at commit `16d5b47` on `feature/fix-ipatool-auth`:
+
 | Check                         | Result                                                |
 | ----------------------------- | ----------------------------------------------------- |
 | Git branch                    | `feature/fix-ipatool-auth`                             |
-| Working tree                  | Clean (no uncommitted changes)                         |
+| Working tree                  | Clean (`git status --porcelain` = empty)               |
 | `go build ./...`              | ✅ Pass (exit 0)                                       |
-| `go test ./... -count=1`      | ✅ 69 tests, 0 failures                                |
-| Spike workspace               | `./temp/ipatool-spike/` exists (branch `pr-493`)       |
+| `go test ./... -count=1`      | ✅ 69 tests, 0 failures (account: 32, appstore: 6, cli: 31) |
+| Spike workspace               | `./temp/ipatool-spike/` exists (branch `pr-493`, build + tests verified) |
 | `.gitignore` includes `/temp/` | ✅                                                     |
 
 ## 7. Decision-Completeness Declaration
