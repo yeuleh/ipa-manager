@@ -44,49 +44,49 @@
 #### E2E-001 / AC-01-1 — Search happy path
 - **Type**: happy
 - **Given**: active profile 已登录；mockAppStore.Search 返回 3 个结果
-- **When**: 运行 `apps search wechat`
+- **When**: 运行 `app search wechat`
 - **Then**: stdout 含表格（Name / Bundle-ID / Version / Price 列）；exit 0
 - **Pass**: output 含 "WeChat" AND "com.tencent.xin" AND exit 0
 
 #### E2E-002 / AC-01-2 — Search no active profile
 - **Type**: failure
 - **Given**: 无 active profile
-- **When**: 运行 `apps search wechat`
+- **When**: 运行 `app search wechat`
 - **Then**: stderr 含 "no active profile" + "accounts use"；exit 1
 - **Pass**: err 含 "no active profile" AND err 含 "accounts use"
 
 #### E2E-002a / AC-01-2 — Search active profile not logged in（E-04 fix: 补充此变体）
 - **Type**: failure
 - **Given**: active profile 存在但 mockStore.HasCredentials=false
-- **When**: 运行 `apps search wechat`
+- **When**: 运行 `app search wechat`
 - **Then**: err 含 "has no credentials" + "auth login"；exit 1
 - **Pass**: err 含 "no credentials" AND err 含 "auth login"
 
 #### E2E-003 / AC-01-3 — Search zero results
 - **Type**: edge
 - **Given**: active profile 已登录；mockAppStore.Search 返回空 slice
-- **When**: 运行 `apps search nonexistentapp12345`
+- **When**: 运行 `app search nonexistentapp12345`
 - **Then**: stdout 含 "no results found"；exit 0
 - **Pass**: output 含 "no results" AND exit 0
 
 #### E2E-004 / AC-01-4 — Search with --limit
 - **Type**: edge
 - **Given**: active profile 已登录；mockAppStore.Search 被调用时 limit=2
-- **When**: 运行 `apps search wechat --limit 2`
+- **When**: 运行 `app search wechat --limit 2`
 - **Then**: mockAppStore 收到 limit=2；exit 0
 - **Pass**: mockAppStore.searchLimit == 2
 
 #### E2E-005 / AC-01-5 — Search with --profile
 - **Type**: happy
 - **Given**: profile "bob_test" 存在且已登录
-- **When**: 运行 `apps search wechat --profile bob_test`
+- **When**: 运行 `app search wechat --profile bob_test`
 - **Then**: mockAppStore.AccountInfo 被调用（用 bob_test 的 factory）；exit 0
 - **Pass**: factory 收到 Profile{ID:"bob_test"} AND exit 0
 
 #### E2E-006 / AC-01-6 — Search invalid --limit
 - **Type**: failure
 - **Given**: active profile 已登录
-- **When**: 运行 `apps search wechat --limit 0`（或 -1 / "abc"）
+- **When**: 运行 `app search wechat --limit 0`（或 -1 / "abc"）
 - **Then**: stderr 含 "invalid --limit value"；exit 1
 - **Pass**: err 含 "invalid --limit"
 
@@ -95,7 +95,7 @@
 #### E2E-007 / AC-02-1 — Download happy path
 - **Type**: happy
 - **Given**: active profile 已登录；mockAppStore.AccountInfo/Lookup/Download/ReplicateSinf 均成功
-- **When**: 运行 `download com.tencent.xin`
+- **When**: 运行 `app download com.tencent.xin`
 - **Then**: stdout 含 "Downloaded" + 文件路径；mockLibraryStore.Add 被调用；exit 0
 - **Pass**: output 含 "Downloaded" AND mockLibraryStore.addCalled == true AND exit 0
 
@@ -109,70 +109,70 @@
 #### E2E-009 / AC-02-3 — Download no active profile
 - **Type**: failure
 - **Given**: 无 active profile
-- **When**: 运行 `download com.tencent.xin`
+- **When**: 运行 `app download com.tencent.xin`
 - **Then**: err 含 "no active profile"；exit 1
 - **Pass**: err 含 "no active profile"
 
 #### E2E-010 / AC-02-4 — Download app not found
 - **Type**: failure
 - **Given**: mockAppStore.Lookup 返回 error（"app not found"）
-- **When**: 运行 `download com.nonexistent.app`
+- **When**: 运行 `app download com.nonexistent.app`
 - **Then**: err 含 "app not found"；exit 1
 - **Pass**: err 含 "app not found: com.nonexistent.app"
 
 #### E2E-011 / AC-02-5 — Download already exists (skip)
 - **Type**: edge
 - **Given**: outputPath 物理文件已存在（预创建 temp file）；无 --force（R2-03 fix: 基于物理文件）
-- **When**: 运行 `download com.tencent.xin`
+- **When**: 运行 `app download com.tencent.xin`
 - **Then**: stdout 含 "already exists"；mockAppStore.Download **未**被调用；exit 0
 - **Pass**: output 含 "already exists" AND mockAS.downloadCalls == 0 AND exit 0
 
 #### E2E-012 / AC-02-6 — Download already exists with --force
 - **Type**: edge
 - **Given**: outputPath 物理文件已存在（预创建 temp file）；有 --force（R4 fix: 与 os.Stat skip 一致）
-- **When**: 运行 `download com.tencent.xin --force`
+- **When**: 运行 `app download com.tencent.xin --force`
 - **Then**: mockAppStore.Download 被调用（重新下载）；exit 0
 - **Pass**: mockAS.downloadCalls == 1 AND exit 0
 
 #### E2E-013 / AC-02-7 — Download license required (free, interactive, yes)
 - **Type**: happy
 - **Given**: mockAppStore.Download 第一次返回 ErrLicenseRequired；Price=0；mockPrompter.confirm=true；Purchase 成功；Download 第二次成功
-- **When**: 运行 `download com.example.freeapp`
+- **When**: 运行 `app download com.example.freeapp`
 - **Then**: mockPrompter.Confirm 被调用；mockAppStore.Purchase 被调用；Download 重试成功；exit 0
 - **Pass**: mockAS.purchaseCalled == true AND mockAS.downloadCalls == 2 AND exit 0
 
 #### E2E-014 / AC-02-7 — Download license required (free, interactive, no)
 - **Type**: edge
 - **Given**: mockAppStore.Download 返回 ErrLicenseRequired；Price=0；mockPrompter.confirm=false
-- **When**: 运行 `download com.example.freeapp`
+- **When**: 运行 `app download com.example.freeapp`
 - **Then**: stdout 含 "cancelled"；mockAppStore.Purchase **未**被调用；exit 0
 - **Pass**: output 含 "cancelled" AND mockAS.purchaseCalled == false AND exit 0
 
 #### E2E-015 / AC-02-8 — Download license required (paid)
 - **Type**: failure
 - **Given**: mockAppStore.Download 返回 ErrLicenseRequired；Price=9.99
-- **When**: 运行 `download com.example.paidapp`
+- **When**: 运行 `app download com.example.paidapp`
 - **Then**: err 含 "paid apps are not supported"；exit 1
 - **Pass**: err 含 "paid apps are not supported"
 
 #### E2E-016 / AC-02-9 — Download with --profile
 - **Type**: happy
 - **Given**: profile "bob_test" 存在且已登录
-- **When**: 运行 `download com.tencent.xin --profile bob_test`
+- **When**: 运行 `app download com.tencent.xin --profile bob_test`
 - **Then**: factory 收到 bob_test；mockLibraryStore.Add 用 bob_test 的 profileID；exit 0
 - **Pass**: factory profile.ID == "bob_test" AND mockLS.addProfileID == "bob_test"
 
 #### E2E-017 / AC-02-10 — Download token expired (auto re-login)
 - **Type**: happy
 - **Given**: mockAppStore.Download 第一次返回 ErrPasswordTokenExpired；RefreshSession 成功（R2-01 fix）；Download 第二次成功
-- **When**: 运行 `download com.tencent.xin`
+- **When**: 运行 `app download com.tencent.xin`
 - **Then**: mockAppStore.RefreshSession 被调用；Download 重试成功；exit 0
 - **Pass**: mockAS.refreshSessionCalled == true AND mockAS.downloadCalls == 2 AND exit 0
 
 #### E2E-018 / AC-02-11 — Download license required (non-interactive)
 - **Type**: failure
 - **Given**: mockAppStore.Download 返回 ErrLicenseRequired；Price=0；isInteractive()=false
-- **When**: 运行 `download com.example.freeapp`（stdin 非 TTY）
+- **When**: 运行 `app download com.example.freeapp`（stdin 非 TTY）
 - **Then**: err 含 "interactive confirmation required"；mockPrompter.Confirm **未**被调用；exit 1
 - **Pass**: err 含 "interactive confirmation required" AND mockPrompter.confirmCalled == false
 
@@ -320,21 +320,21 @@
 #### E2E-035 / AC-08-1 — --profile not found
 - **Type**: failure
 - **Given**: profile "ghost" 不存在
-- **When**: 运行 `download com.tencent.xin --profile ghost`
+- **When**: 运行 `app download com.tencent.xin --profile ghost`
 - **Then**: err 含 "profile 'ghost' not found"；exit 1
 - **Pass**: err 含 "profile" AND err 含 "not found"
 
 #### E2E-036 / AC-08-2 — --profile not logged in
 - **Type**: failure
 - **Given**: profile "charlie" 存在但 mockStore.HasCredentials=false
-- **When**: 运行 `apps search wechat --profile charlie`
+- **When**: 运行 `app search wechat --profile charlie`
 - **Then**: err 含 "has no credentials"；exit 1
 - **Pass**: err 含 "no credentials"
 
 #### E2E-037 / AC-08-3 — No --profile uses active
 - **Type**: happy
 - **Given**: active profile = "alice"
-- **When**: 运行 `download com.tencent.xin`（无 --profile）
+- **When**: 运行 `app download com.tencent.xin`（无 --profile）
 - **Then**: factory 收到 alice
 - **Pass**: factory profile.ID == "alice"
 
@@ -343,14 +343,14 @@
 #### E2E-038 / AC-09-1 — Download specific version
 - **Type**: happy
 - **Given**: mockAppStore.Download 接收 ExternalVersionID="abc123"
-- **When**: 运行 `download com.tencent.xin --external-version-id abc123`
+- **When**: 运行 `app download com.tencent.xin --external-version-id abc123`
 - **Then**: mockAppStore.Download 收到 ExternalVersionID；downloadResult.Version 对应；stdout + library list 显示该版本；exit 0
 - **Pass**: mockAS.downloadExternalVersionID == "abc123" AND output 含版本号
 
 #### E2E-039 / AC-09-2 — Download invalid version
 - **Type**: failure
 - **Given**: mockAppStore.Download 返回 Apple error
-- **When**: 运行 `download com.tencent.xin --external-version-id invalid`
+- **When**: 运行 `app download com.tencent.xin --external-version-id invalid`
 - **Then**: err 含 Apple 错误消息；exit 1
 - **Pass**: require.Error
 
@@ -359,7 +359,7 @@
 #### E2E-040 / AC-10-1 — Download with --output
 - **Type**: happy
 - **Given**: mockAppStore.Download 成功
-- **When**: 运行 `download com.tencent.xin --output /tmp/test.ipa`
+- **When**: 运行 `app download com.tencent.xin --output /tmp/test.ipa`
 - **Then**: mockAppStore.Download OutputPath="/tmp/test.ipa"；exit 0
 - **Pass**: mockAS.downloadOutputPath == "/tmp/test.ipa"
 
@@ -373,28 +373,28 @@
 #### E2E-042 / AC-10-3 — --output already exists (no --force)
 - **Type**: edge（E-03 fix: 基于物理文件存在性，非索引）
 - **Given**: outputPath 物理文件已存在（temp file 预创建）；未传 --force
-- **When**: 运行 `download com.tencent.xin --output /tmp/existing.ipa`
+- **When**: 运行 `app download com.tencent.xin --output /tmp/existing.ipa`
 - **Then**: stdout 含 "already exists"；mockAppStore.Download **未**被调用；exit 0
 - **Pass**: output 含 "already exists" AND mockAS.downloadCalls == 0 AND exit 0
 
 #### E2E-043 / AC-10-4 — --output parent dir missing
 - **Type**: failure
 - **Given**: --output 指向不存在的目录
-- **When**: 运行 `download com.tencent.xin --output /nonexistent/dir/app.ipa`
+- **When**: 运行 `app download com.tencent.xin --output /nonexistent/dir/app.ipa`
 - **Then**: err 含 "output directory does not exist"；exit 1
 - **Pass**: err 含 "output directory does not exist"
 
 #### E2E-044 / AC-10-5 — --output is directory
 - **Type**: failure
 - **Given**: --output 指向已存在的目录
-- **When**: 运行 `download com.tencent.xin --output /tmp`
+- **When**: 运行 `app download com.tencent.xin --output /tmp`
 - **Then**: err 含 "output path is a directory"；exit 1
 - **Pass**: err 含 "output path is a directory"
 
 #### E2E-045 / AC-10-6 — --output permission denied
 - **Type**: failure
 - **Given**: --output 父目录无写权限（手动创建只读目录）
-- **When**: 运行 `download com.tencent.xin --output /readonly/app.ipa`
+- **When**: 运行 `app download com.tencent.xin --output /readonly/app.ipa`
 - **Then**: err 含 "cannot write to output path"；exit 1
 - **Pass**: err 含 "cannot write" OR err 含 "permission denied"
 
@@ -403,14 +403,14 @@
 #### E2E-N01 / NFR-04 — No credential leak in output
 - **Type**: NFR
 - **Given**: download 成功（mockAppStore AccountInfo 含 Password）
-- **When**: 运行 `download com.tencent.xin`
+- **When**: 运行 `app download com.tencent.xin`
 - **Then**: stdout/stderr **不含** password / passwordToken / directoryServicesIdentifier
 - **Pass**: `assert.NotContains(output, "password-value")` etc.
 
 #### E2E-N02 / NFR-05 — Progress bar in interactive mode
 - **Type**: NFR（手动验收）
 - **Given**: 交互式终端；下载 > 5MB 的 app
-- **When**: 运行 `download <bundle-id>`
+- **When**: 运行 `app download <bundle-id>`
 - **Then**: 可见进度条更新
 - **Pass**: 肉眼确认进度条（手动）
 
