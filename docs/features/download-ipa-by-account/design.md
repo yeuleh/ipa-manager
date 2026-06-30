@@ -495,7 +495,8 @@ User: ipa-manager download <bundle-id>
   │    └─ ✗ "app not found" → error + exit 1 (AC-02-4)
   │
   ├─ [resolveOutputPath(profile, app, --output)]（R2-02 fix: 传目录给 ipatool，不预算文件名）
-  │    ├─ --output given → validate path (DD-09) → use as-is (file or dir)
+  │    ├─ --output given → validate path (DD-09) → OutputPath = user-specified FILE path（R3 fix: --output 始终是文件路径，传给 ipatool 作为文件；
+  │    │      若是目录则 AC-10-5 报错）
   │    └─ no --output → OutputPath = library directory = "<configRoot>/library/<profileID>/"
   │         （ipatool 的 resolveDestinationPath 检测到目录后会用下载响应中的版本生成文件名，
   │          因此 --external-version-id 的版本也正确嵌入文件名）
@@ -1040,22 +1041,27 @@ User: ipa-manager download com.tencent.xin
   │
   ├─ [appStore.Lookup("com.tencent.xin")] → AppInfo{ID:123456789, Name:"WeChat", Version:"8.0.34", Price:0}
   │
-  ├─ [resolveOutputPath(--output="")] → "/home/.ipa-manager/library/alice_example_com/com.tencent.xin_123456789_8.0.34.ipa"
+  ├─ [resolveOutputPath(--output="")]（R3 fix: 与 DD-04 一致）
+  │    └─ no --output → OutputPath = library DIRECTORY = "/home/.ipa-manager/library/alice_example_com/"
+  │         （传目录给 ipatool，由它用下载响应版本生成文件名）
   │
-  ├─ [libraryStore.Get("alice_example_com", "com.tencent.xin")]
-  │    └─ → ErrEntryNotFound (not in index) → continue
+  ├─ [computeSkipCheckPath(OutputPath, app)] → "/home/.ipa-manager/library/alice_example_com/com.tencent.xin_123456789_8.0.34.ipa"
+  │    └─ 用 Lookup 版本做近似 skip 检测（仅用于提示，不影响实际下载文件名）
+  │
+  ├─ [os.Stat(skipCheckPath)] → not exists → continue（R3 fix: 物理文件检查）
   │
   ├─ [progress := NewProgress()] → progressBarWrapper (TTY) or nil
   │
-  ├─ [appStore.Download(DownloadInput{BundleID, AppID, OutputPath, Progress})]
-  │    └─ → DownloadResult{DestinationPath, Version:"8.0.34", Sinfs}
+  ├─ [appStore.Download(DownloadInput{BundleID, AppID, OutputPath=DIR, Progress})]
+  │    └─ ipatool resolveDestinationPath(dir, version-from-response) → 生成完整文件名
+  │    └─ → DownloadResult{DestinationPath:"...com.tencent.xin_123456789_<actual-version>.ipa", Version, Sinfs}
   │
   ├─ [appStore.ReplicateSinf(Sinfs, DestinationPath)]
   │    └─ → nil (DRM keys applied)
   │
-  ├─ [libraryStore.Add("alice_example_com", Entry{BundleID, AppID, Version, FilePath, FileSize, DownloadedAt})]
+  ├─ [libraryStore.Add("alice_example_com", Entry{BundleID, AppID, Version:downloadResult.Version, FilePath:DestinationPath, FileSize, DownloadedAt})]
   │
-  └─ print "✓ Downloaded: WeChat 8.0.34 → /home/.ipa-manager/library/alice_example_com/com.tencent.xin_123456789_8.0.34.ipa"
+  └─ print "✓ Downloaded: WeChat <version> → <DestinationPath>"
      exit 0 (AC-02-1)
 ```
 

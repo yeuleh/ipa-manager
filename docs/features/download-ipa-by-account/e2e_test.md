@@ -308,6 +308,13 @@
 - **Then**: stdout 含 "file already absent"；index 条目被移除；exit 0（无文件可删，不需确认）
 - **Pass**: output 含 "file already absent" AND exit 0
 
+#### E2E-034c / AC-05-9 — Library clean non-interactive all (stale-only, no-op)（R3 fix）
+- **Type**: edge
+- **Given**: mockLibraryStore.List 返回 2 个 Entry（FilePath 均指向不存在文件）；isInteractive()=false
+- **When**: 运行 `library clean`（stdin 非 TTY）
+- **Then**: 移除 2 个 stale 索引条目；exit 0（无现存文件可删，不需确认）
+- **Pass**: output 含 "stale" AND exit 0 AND index 为空
+
 ### US-08 — --profile flag（跨命令）
 
 #### E2E-035 / AC-08-1 — --profile not found
@@ -487,6 +494,7 @@
 | E2E-034 | AC-05-9 (no-op) | US-05 | edge |
 | E2E-034a | AC-05-9 | US-05 | failure (E-01 fix) |
 | E2E-034b | AC-05-9 / AC-05-8 | US-05 | edge (E-01 fix) |
+| E2E-034c | AC-05-9 | US-05 | edge (R3 fix) |
 | E2E-035 | AC-08-1 | US-08 | failure |
 | E2E-036 | AC-08-2 | US-08 | failure |
 | E2E-037 | AC-08-3 | US-08 | happy |
