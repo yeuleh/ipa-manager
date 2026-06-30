@@ -106,34 +106,34 @@ No deferred items. All minor findings either fixed during execution or accepted 
 
 The T1 re-do (base change from main HEAD to v2.3.0) was an execution-phase discovery, not a blocked task. It was resolved immediately by changing the fork base and re-doing T1+T2 in a single commit.
 
-## 6. Validate-Phase Verification Commands
+### Full Regression Output (validate-phase fresh run)
 
-All commands run fresh in validate phase:
+```
+$ go build ./...          # exit 0
+$ go vet ./...            # exit 0 (no output)
+$ go test ./... -count=1
+ok  github.com/yeuleh/ipa-manager/internal/account   0.900s
+ok  github.com/yeuleh/ipa-manager/internal/appstore   1.670s
+ok  github.com/yeuleh/ipa-manager/internal/cli        4.407s
+# 69 tests, 0 failures
+```
 
-```bash
-# E2E-001: build
-go build -o ./bin/ipa-manager ./cmd/ipa-manager  # exit 0
+### Cross-Compile Output (validate-phase fresh run)
 
-# E2E-002: test
-go test ./... -count=1  # 69 tests, 0 failures
+```
+$ GOARCH=arm64 go build ./...   # exit 0
+$ GOARCH=amd64 go build ./...   # exit 0
+```
 
-# E2E-003: go.mod
-grep "replace.*ipatool" go.mod  # v2.3.1-fix-auth.5
+### Switch-Back Proof Output (validate-phase fresh run)
 
-# E2E-004: cross-compile
-GOARCH=arm64 go build ./...  # exit 0
-GOARCH=amd64 go build ./...  # exit 0
-
-# E2E-008: switch-back (fresh re-run)
-# [upstream swap] → build + 69 tests pass → [fork restore]
-
-# E2E-009: security
-git diff main...feature/fix-ipatool-auth  # no personal data
-
-# Full regression
-go build ./...  # exit 0
-go vet ./...    # exit 0
-go test ./... -count=1  # 69 tests, 0 failures
+```
+$ [swap to upstream v2.3.0]
+$ go build ./...                # exit 0
+$ go test ./... -count=1        # 69 tests, 0 failures
+$ [restore fork .5]
+$ grep "replace.*ipatool" go.mod
+replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-auth.5
 ```
 
 ## 7. Conclusion

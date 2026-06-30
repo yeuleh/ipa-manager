@@ -81,7 +81,7 @@ replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-au
 
 #### DD-04: No application code changes
 
-**Decision**: Only `go.mod` and `go.sum` change in the ipa-manager repo. No `.go` files are modified.
+**Decision**: Only `go.mod` and `go.sum` change in the ipa-manager repo among code/build files. No `.go` files are modified. (Documentation files under `docs/` and `AGENTS.md` are updated to reflect the dependency swap, but these are not application code.)
 
 **Rationale**: The `ProfileAppStore` adapter (built in the previous mission, `internal/appstore/adapter.go` + `client_impl.go`) imports ipatool types only inside the adapter package. The `replace` directive transparently redirects these imports to the fork. No source-level changes needed.
 
