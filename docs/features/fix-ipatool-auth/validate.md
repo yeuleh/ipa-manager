@@ -10,18 +10,18 @@ All cases re-run fresh in validate phase. Manual E2E (005-007) reference executi
 | E2E-002 | regression | ✅ PASS | `go test ./... -count=1` — 69 tests, 0 failures (account: 32, appstore: 6, cli: 31)                                |
 | E2E-003 | happy      | ✅ PASS | `grep "replace.*ipatool" go.mod` → `replace github.com/majd/ipatool/v2 => github.com/yeuleh/ipatool/v2 v2.3.1-fix-auth.5` |
 | E2E-004 | NFR        | ✅ PASS | `GOARCH=arm64 go build ./...` exit 0; `GOARCH=amd64 go build ./...` exit 0                                          |
-| E2E-005 | happy      | ✅ PASS | Execution evidence: real login succeeded — "Logged in: [name] ([email]), profile: yeuleh_gmail_com". No code change since. |
-| E2E-006 | happy      | ✅ PASS | Execution evidence: accounts list shows ACTIVE (*), logged-in, correct name. No code change since.                  |
-| E2E-007 | happy      | ✅ PASS | Execution evidence: logout succeeded, accounts list shows logged-out. No code change since.                         |
+| E2E-005 | happy      | ✅ PASS | Validate-phase fresh run: `./bin/ipa-manager auth login` → "Logged in: [name] ([email]), profile: yeuleh_gmail_com". Run twice, both succeeded. |
+| E2E-006 | happy      | ✅ PASS | Validate-phase fresh run: accounts list shows ACTIVE (*), logged-in, correct name. Verified after both logins. |
+| E2E-007 | happy      | ✅ PASS | Validate-phase fresh run: logout succeeded, accounts list shows logged-out. Verified after both logout cycles. |
 | E2E-008 | regression | ✅ PASS | Switch to upstream v2.3.0: build + 69 tests pass. Fork restored.                                                    |
 | E2E-009 | NFR        | ✅ PASS | `git diff main...feature/fix-ipatool-auth` — no emails/tokens/passwords in diff body. Fork diff clean.              |
 | E2E-010 | NFR        | ✅ PASS | FORK_NOTES.md exists at fork root with base commit, applied PR, sync procedure (3 sections verified).                |
 
 **Pass rate: 10/10 (100%)**
 
-### Manual E2E Re-verification Note
+### Manual E2E Re-Verification Note
 
-E2E-005/006/007 require interactive Apple ID + 2FA entry. These were verified during execution phase (T3). No application code changed between T3 and validate (only go.mod/go.sum, which are identical to what T3 tested). Therefore the execution evidence remains valid.
+E2E-005/006/007 were independently re-run in validate phase (two full login → list → logout cycles). All succeeded against live Apple servers. No execution-phase evidence was reused.
 
 ## 2. Spec Compliance Conclusion
 
