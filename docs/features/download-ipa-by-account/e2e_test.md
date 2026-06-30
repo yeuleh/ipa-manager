@@ -1,6 +1,6 @@
 # E2E Test — download-ipa-by-account
 
-> 本文档从 `requirements.md`（42 AC）+ `design.md` 派生。遵循 spec → cases → code 单向流：测试用例不反向从实现推导。
+> 本文档从 `requirements.md`（47 AC）+ `design.md` 派生。遵循 spec → cases → code 单向流：测试用例不反向从实现推导。
 
 ---
 
@@ -220,7 +220,7 @@
 - **Given**: mockLibraryStore 有 com.tencent.xin 的 8.0.34 和 8.0.35；mockPrompter.confirm=true
 - **When**: 运行 `library clean com.tencent.xin --version 8.0.34`
 - **Then**: 仅确认并删除 8.0.34；8.0.35 保留；exit 0
-- **Pass**: output 含 "8.0.34" AND output 不含删除 8.0.35 的操作 AND exit 0
+- **Pass**: mockLS.removeVersionCalled == true AND mockLS.removeVersionArgs == ("com.tencent.xin", "8.0.34") AND mockLS 中仍含 8.0.35 条目（MV-05 fix: L3 oracle）
 
 #### E2E-050 / AC-05-12 — Library clean non-existent version
 - **Type**: edge
@@ -270,14 +270,14 @@
 
 #### E2E-026 / AC-05-3 — Library clean specific bundle-id
 - **Type**: happy
-- **Given**: mockLibraryStore.Get 返回 Entry；mockPrompter.confirm=true
+- **Given**: mockLibraryStore.Get 返回 []Entry{entry}（单版本，MV-03 fix）；mockPrompter.confirm=true
 - **When**: 运行 `library clean com.tencent.xin`
 - **Then**: stdout 含 "remove" + 版本 + 大小；mockLibraryStore.Remove 被调用；exit 0
 - **Pass**: output 含 "remove" AND mockLS.removeBundleID == "com.tencent.xin" AND exit 0
 
 #### E2E-027 / AC-05-3 — Library clean specific bundle-id (reject)
 - **Type**: edge
-- **Given**: mockLibraryStore.Get 返回 Entry；mockPrompter.confirm=false
+- **Given**: mockLibraryStore.Get 返回 []Entry{entry}（单版本，MV-03 fix）；mockPrompter.confirm=false
 - **When**: 运行 `library clean com.tencent.xin`
 - **Then**: stdout 含 "cancelled"；mockLibraryStore.Remove **未**被调用；exit 0
 - **Pass**: output 含 "cancelled" AND mockLS.removeCalled == false AND exit 0
@@ -296,16 +296,16 @@
 - **Then**: mockLibraryStore 用 "bob_test"
 - **Pass**: mockLS 的 profileID == "bob_test"
 
-#### E2E-030 / AC-05-6 — Library list after clean
+#### E2E-030 / AC-05-6 — Library list after clean（CS-04 fix: 版本粒度）
 - **Type**: edge
-- **Given**: clean 成功删除了一个 IPA
+- **Given**: clean 成功删除了一个 IPA 的特定版本
 - **When**: 运行 `library list`
-- **Then**: 被删除的 bundle-id 不在列表中
-- **Pass**: mockLS.List 不含已删除 bundle-id
+- **Then**: 被删除的 (bundle-id, version) 行不再出现；同 app 的其他版本（如有）保留
+- **Pass**: mockLS.List 不含已删除的 (bundle-id, version)
 
 #### E2E-031 / AC-05-7 — Library clean custom-output IPA
 - **Type**: edge
-- **Given**: mockLibraryStore.Get 返回 Entry（file_path = "/custom/path.ipa"）；mockPrompter.confirm=true
+- **Given**: mockLibraryStore.Get 返回 []Entry{entry}（单版本，MV-03 fix）（file_path = "/custom/path.ipa"）；mockPrompter.confirm=true
 - **When**: 运行 `library clean com.example.app`
 - **Then**: stdout 含完整自定义路径 "/custom/path.ipa"；exit 0
 - **Pass**: output 含 "/custom/path.ipa"
@@ -333,14 +333,14 @@
 
 #### E2E-034a / AC-05-9 — Library clean non-interactive specific bundle (file exists)
 - **Type**: failure（E-01 fix: 补充 specific-bundle 非交互覆盖）
-- **Given**: mockLibraryStore.Get 返回 Entry（文件存在）；isInteractive()=false
+- **Given**: mockLibraryStore.Get 返回 []Entry{entry}（单版本，MV-03 fix）（文件存在）；isInteractive()=false
 - **When**: 运行 `library clean com.tencent.xin`（stdin 非 TTY）
 - **Then**: err 含 "confirmation required in non-interactive mode"；exit 1
 - **Pass**: err 含 "confirmation required"
 
 #### E2E-034b / AC-05-9 / AC-05-8 — Library clean non-interactive specific bundle (file absent)
 - **Type**: edge（E-01 fix: 非交互 + 文件不存在 = no-op）
-- **Given**: mockLibraryStore.Get 返回 Entry（FilePath 指向不存在文件）；isInteractive()=false
+- **Given**: mockLibraryStore.Get 返回 []Entry{entry}（单版本，MV-03 fix）（FilePath 指向不存在文件）；isInteractive()=false
 - **When**: 运行 `library clean com.example.app`（stdin 非 TTY）
 - **Then**: stdout 含 "file already absent"；index 条目被移除；exit 0（无文件可删，不需确认）
 - **Pass**: output 含 "file already absent" AND exit 0
@@ -480,7 +480,7 @@
 
 | 模块 | 测试文件 | 覆盖点 |
 |------|----------|--------|
-| `library.Store` | `internal/library/store_test.go` | Add/List/Get/Remove/CleanAll；temp dir 隔离；JSON 原子写；空状态；STALE 条目 |
+| `library.Store` | `internal/library/store_test.go` | Add 同 (bid,ver) 替换 / Add 不同版本共存；List 多版本排序；Get 返回多版本；GetVersion found/not found；RemoveVersion 保留其他版本；Remove 删除全部版本；CleanAll；temp dir 隔离；JSON 原子写；空状态；STALE 条目（MV-04 fix） |
 | `appstore` 类型转换 | `internal/appstore/query_test.go` | `appToAppInfo` / `appInfoToApp` 字段映射；`sinfsToOur` 转换 |
 | `cli.resolveProfile` | `internal/cli/helpers_test.go` | active 缺省 / --profile 覆盖 / not found / not logged in / requireCredentials 开关 |
 | `cli.validateOutputPath` | `internal/cli/helpers_test.go` | 正常 / 目录 / 父缺失 / 权限拒绝 |
