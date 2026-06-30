@@ -55,7 +55,7 @@ No parallel tracks. No Foundation tasks (T1 is a story task — it produces the 
 **Steps**:
 1. Fork `majd/ipatool` to `yeuleh/ipatool` via `gh repo fork` or GitHub UI.
 2. Clone fork locally (or reuse spike workspace `./temp/ipatool-spike`).
-3. `git cherry-pick a98f833` (PR #493 — spike-verified to apply cleanly).
+3. `git cherry-pick a98f833` (PR #493 — trivial conflict in `appstore_bag_test.go` test additions, resolved by accepting theirs).
 4. `go generate ./...` (regenerate mocks).
 5. `go build ./...` — verify exit 0.
 6. `go test ./...` — verify all pass.
