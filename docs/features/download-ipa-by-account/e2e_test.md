@@ -284,7 +284,7 @@
 
 #### E2E-028 / AC-05-4 — Library clean non-existent bundle-id
 - **Type**: edge
-- **Given**: mockLibraryStore.Get 返回 ErrEntryNotFound
+- **Given**: mockLibraryStore.Get 返回空 []Entry（无此 bundle-id，F2-03 fix: Get 返回空 slice 非 error）
 - **When**: 运行 `library clean com.nonexistent.app`
 - **Then**: stdout 含 "no IPA"；exit 0
 - **Pass**: output 含 "no IPA" AND exit 0
