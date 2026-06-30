@@ -15,8 +15,8 @@ Previous mission `multi-account-login-switch` delivered the full multi-account C
 PR #493 ("Fix dynamic App Store auth endpoint discovery", 4 approvals) was applied to ipatool master and **verified against live Apple servers**:
 
 ```
-./ipatool-patched auth login --email yeuleh@gmail.com
-→ email=yeuleh@gmail.com name="乐 庾" success=true
+./ipatool-patched auth login
+→ success=true  (account email and name returned correctly)
 ```
 
 PR #493 fixes the root cause by:
@@ -43,11 +43,12 @@ PR #493 fixes the root cause by:
 - A-02: GitHub account `yeuleh` has permission to create repos / forks.
 - A-03: ipa-manager's `ProfileAppStore` adapter (built in previous mission) correctly isolates ipatool types — no application code changes needed, only `go.mod`.
 - A-04: The 69 existing automated tests are unaffected by the dependency swap (they mock the AppStore interface, not the real ipatool client).
+- A-05: Failure behavior for invalid credentials, 2FA failure, and Apple endpoint errors is unchanged from the previous mission (`multi-account-login-switch` design §3.8) — out of scope for this mission.
 
 ### Dependencies
 
 - D-01: `github.com/yeuleh/ipatool/v2` — fork of `github.com/majd/ipatool/v2` with PR #493 applied.
-- D-02: Spike workspace at `./temp/ipatool-spike/` (branch `pr-493`) — source for the fork.
+- D-02: Upstream PR #493 commit `a98f833` ("Fix dynamic App Store auth endpoint discovery") on `majd/ipatool` — the authoritative source of the patch to apply to the fork.
 
 ## 3. Scope
 
@@ -102,13 +103,13 @@ PR #493 fixes the root cause by:
 
 ### US-03 — Upstream switch-back path
 
-- **AC-03-1**: Given upstream `majd/ipatool` merges an equivalent fix and tags a release, When I remove the `replace` directive and run `go build ./...`, Then the build succeeds (no application code depends on fork-specific APIs).
+- **AC-03-1**: Given the forked dependency is replaced by a module exposing the same public API (e.g., upstream at an equivalent commit), When I run `go build ./...` and `go test ./...`, Then the build and all tests pass — proving ipa-manager depends only on ipatool's public API, not fork-specific internals.
 
 ## 6. Non-Functional Requirements
 
 | ID      | Category        | Requirement                                                                                                   | Measurement                              |
 | ------- | --------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| NFR-01  | Compatibility   | Works on macOS Apple Silicon and Intel.                                                                        | `go build` succeeds on both architectures. |
+| NFR-01  | Compatibility   | Compiles on macOS Apple Silicon and Intel (cross-compilation `GOARCH=arm64` / `GOARCH=amd64` acceptable if real hardware is unavailable). | `go build` succeeds; `GOARCH` cross-compile succeeds. |
 | NFR-02  | Reproducibility | `go.mod` replace directive points to an immutable ref (tag or 40-char SHA), never a branch name.               | Manual inspection of go.mod.              |
 | NFR-03  | Maintainability | The fork's README or a doc in ipa-manager records: (a) which upstream commit the fork is based on, (b) which PR was applied, (c) how to sync. | Doc exists and is accurate.               |
 | NFR-04  | Security        | No credentials, tokens, or personal data in the fork repo or ipa-manager repo.                                 | `git log -p` audit of all changes.        |
@@ -132,7 +133,7 @@ PR #493 fixes the root cause by:
 
 ## 9. Clarification Notes
 
-- **Spike verified**: PR #493 is sufficient. No need to combine with PR #500/#502 at this stage.
+- **Spike verified**: PR #493 (commit `a98f833`) is sufficient. Spike workspace at `./temp/ipatool-spike/` was used for verification and will be cleaned up before mission completion; the authoritative patch source is the upstream PR commit.
 - **Fork hosting**: `github.com/yeuleh/ipatool` (user-confirmed).
 - **Why not wait for upstream?**: Upstream maintainer is unresponsive (7 PRs open since Jun 10, zero merges as of Jun 30). Waiting blocks all ipa-manager account functionality indefinitely.
 - **Why not vendor?**: Vendoring bloats the repo and makes upstream sync harder. A fork with replace is the standard Go practice for unmaintained dependencies.
