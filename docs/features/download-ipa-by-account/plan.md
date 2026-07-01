@@ -71,7 +71,7 @@ T2 (lib list+Store)┤                         └──► T5 (download flags)
 | **Completion criteria** | Spock review pass + tests pass + build + vet |
 | **Rollback note** | library/ 目录首次 download 时自动创建（additive，无迁移） |
 
-### T3: `app download` — 核心下载流程
+### T3: `app download` — 核心下载流程 ✅ DONE
 
 | 维度 | 内容 |
 |------|------|

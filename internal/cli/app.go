@@ -14,7 +14,7 @@ func appCmd(deps Deps) *cobra.Command {
 		Use:   "app",
 		Short: "Search the App Store and download apps (active profile)",
 	}
-	cmd.AddCommand(appSearchCmd(deps), appVersionsCmd())
+	cmd.AddCommand(appSearchCmd(deps), appDownloadCmd(deps), appVersionsCmd())
 	return cmd
 }
 

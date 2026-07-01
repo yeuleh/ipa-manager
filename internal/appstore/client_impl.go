@@ -7,6 +7,7 @@ import (
 
 	"github.com/99designs/keyring"
 	cookiejar "github.com/juju/persistent-cookiejar"
+	"github.com/schollz/progressbar/v3"
 	ipaappstore "github.com/majd/ipatool/v2/pkg/appstore"
 	ipakeychain "github.com/majd/ipatool/v2/pkg/keychain"
 	"github.com/majd/ipatool/v2/pkg/util/machine"
@@ -87,6 +88,58 @@ func (a *profileAppStoreAdapter) Search(query string, limit int64) ([]AppInfo, e
 		results[i] = appToAppInfo(app)
 	}
 	return results, nil
+}
+
+func (a *profileAppStoreAdapter) Lookup(bundleID string) (AppInfo, error) {
+	if a.account == nil {
+		return AppInfo{}, fmt.Errorf("AccountInfo must be called before Lookup")
+	}
+	out, err := a.inner.Lookup(ipaappstore.LookupInput{
+		Account:  *a.account,
+		BundleID: bundleID,
+	})
+	if err != nil {
+		return AppInfo{}, err
+	}
+	return appToAppInfo(out.App), nil
+}
+
+func (a *profileAppStoreAdapter) Download(input DownloadInput) (DownloadResult, error) {
+	if a.account == nil {
+		return DownloadResult{}, fmt.Errorf("AccountInfo must be called before Download")
+	}
+	var pb *progressbar.ProgressBar
+	if input.Progress != nil {
+		if w, ok := input.Progress.(*progressBarWrapper); ok {
+			pb = w.inner
+		}
+	}
+	out, err := a.inner.Download(ipaappstore.DownloadInput{
+		Account:           *a.account,
+		App:               appInfoToApp(input.BundleID, input.AppID),
+		OutputPath:        input.OutputPath,
+		Progress:          pb,
+		ExternalVersionID: input.ExternalVersionID,
+	})
+	if err != nil {
+		return DownloadResult{}, err
+	}
+	return DownloadResult{
+		DestinationPath: out.DestinationPath,
+		Version:         extractVersionFromPath(out.DestinationPath),
+		Sinfs:           sinfsToOur(out.Sinfs),
+	}, nil
+}
+
+func (a *profileAppStoreAdapter) ReplicateSinf(sinfs []Sinf, packagePath string) error {
+	ipaSinfs := make([]ipaappstore.Sinf, len(sinfs))
+	for i, s := range sinfs {
+		ipaSinfs[i] = ipaappstore.Sinf{ID: s.ID, Data: s.Data}
+	}
+	return a.inner.ReplicateSinf(ipaappstore.ReplicateSinfInput{
+		Sinfs:       ipaSinfs,
+		PackagePath: packagePath,
+	})
 }
 
 // NewProfileAppStore constructs a ProfileAppStore scoped to a single account

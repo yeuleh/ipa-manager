@@ -11,19 +11,8 @@ func installCmd() *cobra.Command {
 		Use:   "install",
 		Short: "Download / install / uninstall / update apps to a device",
 	}
-	cmd.AddCommand(installDownloadCmd(), installPushCmd(), installUninstallCmd(), installUpdateCmd())
+	cmd.AddCommand(installPushCmd(), installUninstallCmd(), installUpdateCmd())
 	return cmd
-}
-
-func installDownloadCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "download <bundle-id>",
-		Short: "Download an app's IPA (active profile, isolated per account)",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("install download: not yet implemented")
-		},
-	}
 }
 
 func installPushCmd() *cobra.Command {
