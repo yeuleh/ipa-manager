@@ -57,6 +57,9 @@ type mockAppStore struct {
 	accountInfoCalled bool
 	searchResults     []appstore.AppInfo
 	searchErr         error
+	searchCalled      bool
+	searchTerm        string
+	searchLimit       int64
 }
 
 func (m *mockAppStore) GetAuthEndpoint() (string, error) {
@@ -88,7 +91,10 @@ func (m *mockAppStore) AccountInfo() (appstore.AccountInfoResult, error) {
 	return m.accountInfoResult, m.accountInfoErr
 }
 
-func (m *mockAppStore) Search(string, int64) ([]appstore.AppInfo, error) {
+func (m *mockAppStore) Search(query string, limit int64) ([]appstore.AppInfo, error) {
+	m.searchCalled = true
+	m.searchTerm = query
+	m.searchLimit = limit
 	return m.searchResults, m.searchErr
 }
 
