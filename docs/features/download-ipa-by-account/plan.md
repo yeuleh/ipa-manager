@@ -87,7 +87,7 @@ T2 (lib list+Store)┤                         └──► T5 (download flags)
 
 **依赖**：T1（resolveProfile + adapter AccountInfo）+ T2（libraryStore.Add）
 
-### T4: `app download` — error recovery（skip/force + license/token retry + non-interactive）
+### T4: `app download` — error recovery ✅ DONE
 
 | 维度 | 内容 |
 |------|------|

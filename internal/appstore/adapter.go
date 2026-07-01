@@ -42,6 +42,15 @@ type ProfileAppStore interface {
 	// ReplicateSinf writes DRM decryption keys into the downloaded IPA.
 	// Must be called after Download for the IPA to be installable.
 	ReplicateSinf(sinfs []Sinf, packagePath string) error
+
+	// Purchase acquires a free-app license (price must be 0).
+	// Must be called after AccountInfo. Used for license-required retry.
+	Purchase(bundleID string, appID int64, price float64) error
+
+	// RefreshSession re-authenticates using cached Account.Password.
+	// Must be called after AccountInfo. Used for token-expired retry.
+	// Does NOT expose Password to callers (NFR-04).
+	RefreshSession() error
 }
 
 // LoginInput is our version of ipatool's appstore.LoginInput.
