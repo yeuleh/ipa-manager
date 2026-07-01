@@ -541,7 +541,8 @@ User: ipa-manager app download <bundle-id>
   ├─ [appStore.ReplicateSinf(downloadResult.Sinfs, downloadResult.DestinationPath)]
   │    └─ ✗ → "failed to apply DRM keys" error + exit 1 (NFR-02)
   │
-  ├─ [libraryStore.Add(profile.ID, Entry{...})]  ← 记录到索引
+  ├─ [stat downloadResult.DestinationPath → fileSize]（data-flow fix: 产出 FileSize）
+  ├─ [libraryStore.Add(profile.ID, Entry{..., FileSize, DownloadedAt: time.Now().UTC()})]  ← 记录到索引
   │
   └─ print "✓ Downloaded: <name> <version> → <path>"
      exit 0 (AC-02-1)
@@ -585,6 +586,7 @@ Download returns ErrPasswordTokenExpired:
 - License retry 和 Token retry 各最多 1 次（不循环重试）。与 ipatool 的 retry-go（2 attempts）语义一致但更显式。
 - Token retry 需要 Password——来自 `AccountInfo()` 返回的 Account（keychain 中存储，A-03）。adapter 内部缓存完整 Account。
 - `appStore.AccountInfo()` 必须在 Lookup/Download 前调用（adapter 的前置条件）。
+- **Purchase token-expiry**（data-flow audit）：DD-08 指出 `ErrPasswordTokenExpired` 可来自 Purchase。T4 实现 license retry 时，若 Purchase 返回 token-expired，应走 RefreshSession → 重试 Purchase，再重试 Download。
 
 **备选方案**：
 - ipatool 的 retry-go 模式 —— **被否**：retry-go 是通用重试库，对我们的"恰好两次"语义过度；显式 if 更可读（与 auth login 设计一致）。
@@ -685,11 +687,18 @@ library clean [bundle-id]
 
 **决策**：在 `internal/cli/helpers.go` 新增 `resolveProfile()` 函数，所有需要 profile 的命令共用。
 
+> **Store 生命周期约定**（data-flow audit fix）：每次 CLI 调用是新进程，`newProductionDeps()` 创建的 Store 内存状态为空。`resolveProfile()` **统一负责调 `deps.Store.Load()`**，确保 config.json 已读入内存后再做任何 Store 读取。这是所有命令的前置条件——不在各命令 RunE 中分散调用。
+
 ```go
 // resolveProfile resolves the target profile from --profile flag or active.
 // Returns ErrProfileNotFound / ErrProfileNotLoggedIn / ErrNoActiveProfile.
 // requireCredentials=true 时校验凭据（search/download 需要；library list/clean 不需要）。
 func resolveProfile(deps Deps, profileFlag string, requireCredentials bool) (account.Profile, error) {
+    // Lifecycle: load config from disk (each CLI invocation is a new process)
+    if err := deps.Store.Load(); err != nil {
+        return account.Profile{}, fmt.Errorf("failed to load config: %w", err)
+    }
+
     var profile account.Profile
     var err error
 
