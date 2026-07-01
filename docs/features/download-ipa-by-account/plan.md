@@ -43,7 +43,7 @@ T2 (lib list+Store)┤                         └──► T5 (download flags)
 
 ## 3. Task List
 
-### T1: `app search` — App Store 搜索
+### T1: `app search` — App Store 搜索 ✅ DONE
 
 | 维度 | 内容 |
 |------|------|
