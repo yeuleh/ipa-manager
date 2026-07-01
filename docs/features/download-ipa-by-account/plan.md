@@ -57,7 +57,7 @@ T2 (lib list+Store)┤                         └──► T5 (download flags)
 | **Completion criteria** | Spock review pass + tests pass + build + vet |
 | **Rollback note** | 无持久化变更（search 只读）；若 `apps.go→app.go` rename 导致问题，git revert 即可 |
 
-### T2: `library list` + Library Store 基础设施
+### T2: `library list` + Library Store 基础设施 ✅ DONE
 
 | 维度 | 内容 |
 |------|------|
