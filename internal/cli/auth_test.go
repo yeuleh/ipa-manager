@@ -50,6 +50,13 @@ type mockAppStore struct {
 	loginCalls   int
 	revokeErr    error
 	revokeCalled bool
+
+	// NEW (T1): query fields — zero-value defaults so auth tests are unaffected
+	accountInfoResult appstore.AccountInfoResult
+	accountInfoErr    error
+	accountInfoCalled bool
+	searchResults     []appstore.AppInfo
+	searchErr         error
 }
 
 func (m *mockAppStore) GetAuthEndpoint() (string, error) {
@@ -73,6 +80,16 @@ func (m *mockAppStore) Login(appstore.LoginInput) (appstore.LoginResult, error) 
 func (m *mockAppStore) Revoke() error {
 	m.revokeCalled = true
 	return m.revokeErr
+}
+
+// NEW (T1): query methods — zero-value defaults, auth tests don't call these
+func (m *mockAppStore) AccountInfo() (appstore.AccountInfoResult, error) {
+	m.accountInfoCalled = true
+	return m.accountInfoResult, m.accountInfoErr
+}
+
+func (m *mockAppStore) Search(string, int64) ([]appstore.AppInfo, error) {
+	return m.searchResults, m.searchErr
 }
 
 // helperRunLoginCmd creates an authLoginCmd with the given Deps, captures
