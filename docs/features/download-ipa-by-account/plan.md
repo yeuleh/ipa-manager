@@ -117,7 +117,7 @@ T2 (lib list+Store)┤                         └──► T5 (download flags)
 
 **依赖**：T3（核心 download 编排）。T4 + T5 可并行。
 
-### T6: `library clean` — 清理（全部/单 app/指定版本/非交互）
+### T6: `library clean` — 清理（全部/单 app/指定版本/非交互） ✅ DONE
 
 | 维度 | 内容 |
 |------|------|
