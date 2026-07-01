@@ -102,7 +102,7 @@ T2 (lib list+Store)┤                         └──► T5 (download flags)
 
 **依赖**：T3（核心 download 编排）
 
-### T5: `app download` — output control（--output + --external-version-id）
+### T5: `app download` — output control ✅ DONE
 
 | 维度 | 内容 |
 |------|------|
