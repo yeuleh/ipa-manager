@@ -131,8 +131,9 @@ func TestAppSearch_WithLimit(t *testing.T) {
 
 	_, err := helperRunSearchCmd(t, deps, "test", "--limit", "2")
 	require.NoError(t, err)
-	// mockAppStore.Search receives the limit — we can't directly assert the limit
-	// value from here, but we verify the command succeeds (AC-01-4: results ≤ N)
+	// T1-04 fix: verify limit and term were passed correctly
+	assert.Equal(t, int64(2), mockAS.searchLimit, "Search should receive limit=2")
+	assert.Equal(t, "test", mockAS.searchTerm, "Search should receive term='test'")
 }
 
 // =============================================================================
@@ -192,6 +193,20 @@ func TestAppSearch_NegativeLimit_Error(t *testing.T) {
 	deps := helperMakeSearchDeps(store, &mockAppStore{})
 
 	_, err := helperRunSearchCmd(t, deps, "test", "--limit", "-1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid --limit")
+}
+
+// T1-03 fix: non-integer limit (AC-01-6)
+func TestAppSearch_NonIntegerLimit_Error(t *testing.T) {
+	store := &mockStore{
+		profiles:    []account.Profile{{ID: "alice_test", Email: "alice@test.com"}},
+		activeID:    "alice_test",
+		credentials: map[string]bool{"alice_test": true},
+	}
+	deps := helperMakeSearchDeps(store, &mockAppStore{})
+
+	_, err := helperRunSearchCmd(t, deps, "test", "--limit", "abc")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid --limit")
 }

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -19,8 +20,8 @@ func appCmd(deps Deps) *cobra.Command {
 
 func appSearchCmd(deps Deps) *cobra.Command {
 	var (
-		profileFlag string
-		limitFlag   int64
+		profileFlag  string
+		limitStrFlag string
 	)
 
 	cmd := &cobra.Command{
@@ -30,9 +31,10 @@ func appSearchCmd(deps Deps) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			term := args[0]
 
-			// Validate limit (AC-01-6)
-			if limitFlag <= 0 {
-				return fmt.Errorf("invalid --limit value: must be a positive integer")
+			// Validate limit (AC-01-6: 0, negative, non-integer all rejected)
+			limitFlag, err := parseLimit(limitStrFlag)
+			if err != nil {
+				return err
 			}
 
 			// Resolve profile (requires credentials for Apple API)
@@ -71,12 +73,26 @@ func appSearchCmd(deps Deps) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&profileFlag, "profile", "", "profile to use (default: active)")
-	cmd.Flags().Int64VarP(&limitFlag, "limit", "l", 5, "maximum amount of search results")
+	cmd.Flags().StringVarP(&limitStrFlag, "limit", "l", "5", "maximum amount of search results (positive integer)")
 	return cmd
+}
+
+// parseLimit validates and parses the --limit flag value (AC-01-6).
+func parseLimit(s string) (int64, error) {
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid --limit value: must be a positive integer")
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("invalid --limit value: must be a positive integer")
+	}
+	return n, nil
 }
 
 func renderSearchResults(cmd *cobra.Command, results []appstore.AppInfo) {
 	out := cmd.OutOrStdout()
+	// T1-01 fix: table header (AC-01-1: columns Name / Bundle-ID / Version / Price)
+	fmt.Fprintln(out, "NAME\tBUNDLE-ID\tVERSION\tPRICE")
 	for _, app := range results {
 		price := "Free"
 		if app.Price > 0 {

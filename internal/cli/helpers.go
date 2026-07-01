@@ -39,7 +39,7 @@ func resolveProfile(deps Deps, profileFlag string, requireCredentials bool) (acc
 		profile, err = deps.Store.Get(profileFlag)
 		if err != nil || (err == nil && profile.ID == "") {
 			if errors.Is(err, apperr.ErrProfileNotFound) || profile.ID == "" {
-				return account.Profile{}, fmt.Errorf("%w. Run `accounts list` to see available profiles", apperr.ErrProfileNotFound)
+				return account.Profile{}, fmt.Errorf("profile '%s' not found. Run `accounts list` to see available profiles", profileFlag)
 			}
 			return account.Profile{}, fmt.Errorf("failed to get profile: %w", err)
 		}
@@ -63,7 +63,7 @@ func resolveProfile(deps Deps, profileFlag string, requireCredentials bool) (acc
 			return account.Profile{}, fmt.Errorf("failed to check credentials: %w", err)
 		}
 		if !has {
-			return account.Profile{}, fmt.Errorf("%w. Run `auth login` to authenticate", apperr.ErrProfileNotLoggedIn)
+			return account.Profile{}, fmt.Errorf("profile '%s' has no credentials. Run `auth login` to authenticate", profile.ID)
 		}
 	}
 
