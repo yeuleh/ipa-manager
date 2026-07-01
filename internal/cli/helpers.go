@@ -32,6 +32,11 @@ func isKeychainNotFound(err error) bool {
 // requireCredentials=true: validates that the profile has keychain credentials
 // (needed for search/download which call Apple API; not needed for library list/clean).
 func resolveProfile(deps Deps, profileFlag string, requireCredentials bool) (account.Profile, error) {
+	// Load config from disk (each CLI invocation is a new process; Store starts empty)
+	if err := deps.Store.Load(); err != nil {
+		return account.Profile{}, fmt.Errorf("failed to load config: %w", err)
+	}
+
 	var profile account.Profile
 
 	if profileFlag != "" {
