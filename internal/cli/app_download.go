@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -122,6 +123,7 @@ func runDownload(deps Deps, cmd *cobra.Command, bundleID, profileFlag, outputFla
 		Version:      downloadResult.Version,
 		FilePath:     downloadResult.DestinationPath,
 		FileSize:     fileSize,
+		DownloadedAt: time.Now().UTC(),
 	})
 	if err != nil {
 		fmt.Fprintf(out, "warning: downloaded IPA but failed to update library index: %v\n", err)
