@@ -9,6 +9,7 @@ import (
 	"github.com/yeuleh/ipa-manager/internal/account"
 	"github.com/yeuleh/ipa-manager/internal/appstore"
 	"github.com/yeuleh/ipa-manager/internal/config"
+	"github.com/yeuleh/ipa-manager/internal/library"
 	"github.com/yeuleh/ipa-manager/internal/ui"
 )
 
@@ -18,8 +19,9 @@ import (
 type Deps struct {
 	Store             account.Store             // profile CRUD + active + credential state
 	AppStoreFactory   appstore.AppStoreFactory  // per-profile AppStore construction
-	UI                ui.Prompter               // interactive prompts (nil until T4 implements)
+	UI                ui.Prompter               // interactive prompts
 	ConfigRoot        string                    // ~/.ipa-manager root path
+	LibraryStore      library.Store             // per-profile IPA library (T2)
 }
 
 // newProductionDeps constructs real (non-mock) dependencies for production use.
@@ -47,5 +49,6 @@ func newProductionDeps() (Deps, error) {
 		AppStoreFactory: appstore.NewAppStoreFactory(paths.Root),
 		UI:              ui.NewPrompter(),
 		ConfigRoot:      paths.Root,
+		LibraryStore:    library.NewStore(paths.Library),
 	}, nil
 }
