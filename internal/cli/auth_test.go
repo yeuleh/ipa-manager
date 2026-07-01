@@ -60,6 +60,14 @@ type mockAppStore struct {
 	searchCalled      bool
 	searchTerm        string
 	searchLimit       int64
+
+	// NEW (T3): download fields — slices for retry modeling (DD-12)
+	lookupResult     appstore.AppInfo
+	lookupErr        error
+	downloadResults  []appstore.DownloadResult
+	downloadErrors   []error
+	downloadCalls    int
+	replicateSinfErr error
 }
 
 func (m *mockAppStore) GetAuthEndpoint() (string, error) {
@@ -96,6 +104,29 @@ func (m *mockAppStore) Search(query string, limit int64) ([]appstore.AppInfo, er
 	m.searchTerm = query
 	m.searchLimit = limit
 	return m.searchResults, m.searchErr
+}
+
+// NEW (T3): download methods
+func (m *mockAppStore) Lookup(string) (appstore.AppInfo, error) {
+	return m.lookupResult, m.lookupErr
+}
+
+func (m *mockAppStore) Download(appstore.DownloadInput) (appstore.DownloadResult, error) {
+	idx := m.downloadCalls
+	m.downloadCalls++
+	var result appstore.DownloadResult
+	var err error
+	if idx < len(m.downloadResults) {
+		result = m.downloadResults[idx]
+	}
+	if idx < len(m.downloadErrors) {
+		err = m.downloadErrors[idx]
+	}
+	return result, err
+}
+
+func (m *mockAppStore) ReplicateSinf([]appstore.Sinf, string) error {
+	return m.replicateSinfErr
 }
 
 // helperRunLoginCmd creates an authLoginCmd with the given Deps, captures

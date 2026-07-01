@@ -24,4 +24,8 @@ var (
 	// profile but none is set. CLI layer formats this with a "Run `accounts use`"
 	// hint.
 	ErrNoActiveProfile = errors.New("no active profile")
+
+	// Download sentinels (mission: download-ipa-by-account).
+	ErrAppNotFound         = errors.New("app not found")
+	ErrReplicateSinfFailed = errors.New("failed to apply DRM keys")
 )

@@ -30,6 +30,18 @@ type ProfileAppStore interface {
 	// Search queries the App Store for apps matching the term.
 	// Uses the cached Account's StoreFront for region-scoped results.
 	Search(query string, limit int64) ([]AppInfo, error)
+
+	// Lookup looks up a single app by bundle-id.
+	// Must be called after AccountInfo.
+	Lookup(bundleID string) (AppInfo, error)
+
+	// Download downloads the IPA to OutputPath (directory or file).
+	// Must be called after AccountInfo + Lookup.
+	Download(input DownloadInput) (DownloadResult, error)
+
+	// ReplicateSinf writes DRM decryption keys into the downloaded IPA.
+	// Must be called after Download for the IPA to be installable.
+	ReplicateSinf(sinfs []Sinf, packagePath string) error
 }
 
 // LoginInput is our version of ipatool's appstore.LoginInput.
