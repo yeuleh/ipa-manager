@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -102,7 +103,25 @@ func runDownload(deps Deps, cmd *cobra.Command, bundleID, profileFlag, outputFla
 		Progress:          progress,
 	})
 	if err != nil {
-		return fmt.Errorf("download failed: %w", err)
+		// T4: error recovery — license retry, token retry
+		recovered, retryErr := handleDownloadError(deps, appStore, err, app, bundleID, outputPath, versionIDArg, progress, out)
+		if retryErr != nil {
+			return retryErr // recovery failed or unhandled error
+		}
+		if !recovered {
+			return nil // handled without retry (user cancelled) → exit 0
+		}
+		// Retry download after recovery
+		downloadResult, err = appStore.Download(appstore.DownloadInput{
+			BundleID:          bundleID,
+			AppID:             app.ID,
+			OutputPath:        outputPath,
+			ExternalVersionID: versionIDArg,
+			Progress:          progress,
+		})
+		if err != nil {
+			return fmt.Errorf("download failed after retry: %w", err)
+		}
 	}
 
 	// 9. ReplicateSinf (DRM keys)
@@ -162,4 +181,86 @@ func validateOutputPath(path string) error {
 		return fmt.Errorf("output directory does not exist: %s", parent)
 	}
 	return nil
+}
+
+// handleDownloadError implements T4 error recovery: license retry + token retry.
+// Returns (recovered=true, nil) if Download should be retried.
+// Returns (false, nil) if handled without retry (e.g. user cancelled) → caller returns nil (exit 0).
+// Returns (false, err) if recovery failed or error is unhandled → caller returns err.
+func handleDownloadError(
+	deps Deps,
+	appStore appstore.ProfileAppStore,
+	err error,
+	app appstore.AppInfo,
+	bundleID, outputPath, versionIDArg string,
+	progress appstore.Progress,
+	out interface{ Write([]byte) (int, error) },
+) (bool, error) {
+	if errors.Is(err, apperr.ErrLicenseRequired) {
+		return handleLicenseRequired(deps, appStore, app, out)
+	}
+	if errors.Is(err, apperr.ErrPasswordTokenExpired) {
+		return handleTokenExpired(appStore, out)
+	}
+	return false, fmt.Errorf("download failed: %w", err) // unhandled
+}
+
+// checkInteractive is overridable in tests (default: appstore.IsInteractive)
+var checkInteractive = appstore.IsInteractive
+
+// handleLicenseRequired: AC-02-7/8/11
+func handleLicenseRequired(
+	deps Deps,
+	appStore appstore.ProfileAppStore,
+	app appstore.AppInfo,
+	out interface{ Write([]byte) (int, error) },
+) (bool, error) {
+	// Paid apps not supported (AC-02-8)
+	if app.Price > 0 {
+		return false, fmt.Errorf("%w. Only free apps can be downloaded", apperr.ErrPaidAppNotSupported)
+	}
+
+	// Non-interactive mode (AC-02-11)
+	if !checkInteractive() {
+		return false, fmt.Errorf("%w; cannot proceed non-interactively", apperr.ErrDownloadNonInteractive)
+	}
+
+	// Interactive prompt (AC-02-7)
+	confirmed, err := deps.UI.Confirm("this app requires a free license. acquire?")
+	if err != nil {
+		return false, fmt.Errorf("failed to prompt: %w", err)
+	}
+	if !confirmed {
+		fmt.Fprintln(out, "cancelled")
+		return false, nil // user declined — not an error, just stop
+	}
+
+	// Acquire license
+	if err := appStore.Purchase(app.BundleID, app.ID, app.Price); err != nil {
+		// Purchase may also fail with token-expired (data-flow audit finding)
+		if errors.Is(err, apperr.ErrPasswordTokenExpired) {
+			if err := appStore.RefreshSession(); err != nil {
+				return false, fmt.Errorf("re-login failed: %w", err)
+			}
+			if err := appStore.Purchase(app.BundleID, app.ID, app.Price); err != nil {
+				return false, fmt.Errorf("license acquisition failed: %w", err)
+			}
+		} else {
+			return false, fmt.Errorf("license acquisition failed: %w", err)
+		}
+	}
+	fmt.Fprintln(out, "license acquired, retrying download...")
+	return true, nil // recovered — retry Download
+}
+
+// handleTokenExpired: AC-02-10
+func handleTokenExpired(
+	appStore appstore.ProfileAppStore,
+	out interface{ Write([]byte) (int, error) },
+) (bool, error) {
+	fmt.Fprintln(out, "session expired, re-authenticating...")
+	if err := appStore.RefreshSession(); err != nil {
+		return false, fmt.Errorf("re-login failed: %w", err)
+	}
+	return true, nil // recovered — retry Download
 }

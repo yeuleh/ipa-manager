@@ -7,11 +7,11 @@ import (
 
 	"github.com/99designs/keyring"
 	cookiejar "github.com/juju/persistent-cookiejar"
-	"github.com/schollz/progressbar/v3"
 	ipaappstore "github.com/majd/ipatool/v2/pkg/appstore"
 	ipakeychain "github.com/majd/ipatool/v2/pkg/keychain"
 	"github.com/majd/ipatool/v2/pkg/util/machine"
 	"github.com/majd/ipatool/v2/pkg/util/operatingsystem"
+	"github.com/schollz/progressbar/v3"
 
 	"github.com/yeuleh/ipa-manager/internal/account"
 )
@@ -122,7 +122,7 @@ func (a *profileAppStoreAdapter) Download(input DownloadInput) (DownloadResult, 
 		ExternalVersionID: input.ExternalVersionID,
 	})
 	if err != nil {
-		return DownloadResult{}, err
+		return DownloadResult{}, mapDownloadError(err)
 	}
 	return DownloadResult{
 		DestinationPath: out.DestinationPath,
@@ -140,6 +140,36 @@ func (a *profileAppStoreAdapter) ReplicateSinf(sinfs []Sinf, packagePath string)
 		Sinfs:       ipaSinfs,
 		PackagePath: packagePath,
 	})
+}
+
+func (a *profileAppStoreAdapter) Purchase(bundleID string, appID int64, price float64) error {
+	if a.account == nil {
+		return fmt.Errorf("AccountInfo must be called before Purchase")
+	}
+	return a.inner.Purchase(ipaappstore.PurchaseInput{
+		Account: *a.account,
+		App:     ipaappstore.App{ID: appID, BundleID: bundleID, Price: price},
+	})
+}
+
+func (a *profileAppStoreAdapter) RefreshSession() error {
+	if a.account == nil {
+		return fmt.Errorf("AccountInfo must be called before RefreshSession")
+	}
+	bag, err := a.inner.Bag(ipaappstore.BagInput{})
+	if err != nil {
+		return fmt.Errorf("failed to get auth endpoint for re-login: %w", err)
+	}
+	output, err := a.inner.Login(ipaappstore.LoginInput{
+		Email:    a.account.Email,
+		Password: a.account.Password,
+		Endpoint: bag.AuthEndpoint,
+	})
+	if err != nil {
+		return err
+	}
+	a.account = &output.Account // update cached account with fresh token
+	return nil
 }
 
 // NewProfileAppStore constructs a ProfileAppStore scoped to a single account

@@ -37,6 +37,12 @@ func NewProgress() Progress {
 	return &progressBarWrapper{inner: pb}
 }
 
+// IsInteractive returns true if stdin is a terminal (TTY).
+// Exported for CLI layer to check non-interactive mode (AC-02-11, AC-05-9).
+func IsInteractive() bool {
+	return isInteractive()
+}
+
 // isInteractive returns true if stdin is a terminal (TTY).
 func isInteractive() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))

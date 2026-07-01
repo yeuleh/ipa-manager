@@ -26,6 +26,10 @@ var (
 	ErrNoActiveProfile = errors.New("no active profile")
 
 	// Download sentinels (mission: download-ipa-by-account).
-	ErrAppNotFound         = errors.New("app not found")
-	ErrReplicateSinfFailed = errors.New("failed to apply DRM keys")
+	ErrAppNotFound            = errors.New("app not found")
+	ErrReplicateSinfFailed    = errors.New("failed to apply DRM keys")
+	ErrLicenseRequired        = errors.New("license is required")
+	ErrPasswordTokenExpired   = errors.New("password token is expired")
+	ErrPaidAppNotSupported    = errors.New("paid apps are not supported")
+	ErrDownloadNonInteractive = errors.New("interactive confirmation required")
 )
