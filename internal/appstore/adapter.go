@@ -14,15 +14,22 @@ import (
 // ipatool's AppStore has 12 methods, we use 3 (ISP — Interface Segregation).
 type ProfileAppStore interface {
 	// GetAuthEndpoint calls ipatool's Bag() and returns the auth endpoint URL.
-	// Must be called before Login to obtain the Endpoint field.
 	GetAuthEndpoint() (string, error)
 
 	// Login authenticates with Apple. Returns ErrAuthCodeRequired if 2FA is needed.
-	// On success, persists account JSON to keychain via ProfileKeychain.
 	Login(input LoginInput) (LoginResult, error)
 
 	// Revoke removes the profile's credentials from keychain.
 	Revoke() error
+
+	// AccountInfo reads the cached Account from keychain.
+	// Must be called before Lookup/Search/Download (adapter caches the full Account).
+	// Does NOT expose Password/PasswordToken (NFR-04).
+	AccountInfo() (AccountInfoResult, error)
+
+	// Search queries the App Store for apps matching the term.
+	// Uses the cached Account's StoreFront for region-scoped results.
+	Search(query string, limit int64) ([]AppInfo, error)
 }
 
 // LoginInput is our version of ipatool's appstore.LoginInput.

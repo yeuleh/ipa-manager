@@ -23,7 +23,8 @@ var keyringOpener = keyring.Open
 // interface. This is the ONLY place in the codebase that imports ipatool's
 // appstore package for method calls. All ipatool API changes are confined here.
 type profileAppStoreAdapter struct {
-	inner ipaappstore.AppStore
+	inner   ipaappstore.AppStore
+	account *ipaappstore.Account // cached after AccountInfo(); used by Lookup/Search/Download/Purchase
 }
 
 func (a *profileAppStoreAdapter) GetAuthEndpoint() (string, error) {
@@ -53,6 +54,39 @@ func (a *profileAppStoreAdapter) Login(input LoginInput) (LoginResult, error) {
 
 func (a *profileAppStoreAdapter) Revoke() error {
 	return a.inner.Revoke()
+}
+
+func (a *profileAppStoreAdapter) AccountInfo() (AccountInfoResult, error) {
+	out, err := a.inner.AccountInfo()
+	if err != nil {
+		return AccountInfoResult{}, err
+	}
+	// Cache full account for subsequent Lookup/Search/Download/Purchase calls.
+	a.account = &out.Account
+	return AccountInfoResult{
+		Email:      out.Account.Email,
+		Name:       out.Account.Name,
+		StoreFront: out.Account.StoreFront,
+	}, nil
+}
+
+func (a *profileAppStoreAdapter) Search(query string, limit int64) ([]AppInfo, error) {
+	if a.account == nil {
+		return nil, fmt.Errorf("AccountInfo must be called before Search")
+	}
+	out, err := a.inner.Search(ipaappstore.SearchInput{
+		Account: *a.account,
+		Term:    query,
+		Limit:   limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	results := make([]AppInfo, len(out.Results))
+	for i, app := range out.Results {
+		results[i] = appToAppInfo(app)
+	}
+	return results, nil
 }
 
 // NewProfileAppStore constructs a ProfileAppStore scoped to a single account
