@@ -17,7 +17,7 @@ func deviceCmd(deps Deps) *cobra.Command {
 		Use:   "device",
 		Short: "Manage connected iOS devices (list / apps / install / uninstall)",
 	}
-	cmd.AddCommand(deviceListCmd(deps), deviceAppsCmd(deps))
+	cmd.AddCommand(deviceListCmd(deps), deviceAppsCmd(deps), deviceInstallCmd(deps))
 	return cmd
 }
 

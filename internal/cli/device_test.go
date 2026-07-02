@@ -2,26 +2,34 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/yeuleh/ipa-manager/internal/account"
 	"github.com/yeuleh/ipa-manager/internal/apperr"
 	"github.com/yeuleh/ipa-manager/internal/device"
+	"github.com/yeuleh/ipa-manager/internal/library"
 	"github.com/yeuleh/ipa-manager/internal/ui"
 )
 
 // mockDeviceService implements device.Service for CLI tests. Extended in
 // later tasks with Install/Uninstall.
 type mockDeviceService struct {
-	devices    []device.DeviceInfo
-	listErr    error
-	listCalls  int
-	appsResult []device.InstalledApp
-	appsErr    error
-	appsCalls  int
-	appsUDID   string // records udid passed to ListInstalledApps
+	devices      []device.DeviceInfo
+	listErr      error
+	listCalls    int
+	appsResult   []device.InstalledApp
+	appsErr      error
+	appsCalls    int
+	appsUDID     string // records udid passed to ListInstalledApps
+	installErr   error
+	installCalls int
+	installUDID  string // records udid passed to Install
+	installPath  string // records ipaPath passed to Install
 }
 
 func (m *mockDeviceService) ListConnected() ([]device.DeviceInfo, error) {
@@ -32,6 +40,12 @@ func (m *mockDeviceService) ListInstalledApps(udid string) ([]device.InstalledAp
 	m.appsCalls++
 	m.appsUDID = udid
 	return m.appsResult, m.appsErr
+}
+func (m *mockDeviceService) Install(udid, ipaPath string) error {
+	m.installCalls++
+	m.installUDID = udid
+	m.installPath = ipaPath
+	return m.installErr
 }
 
 func newDeviceListDeps(svc *mockDeviceService) Deps {
@@ -383,3 +397,204 @@ func TestDeviceLabel_Format(t *testing.T) {
 	// silence unused import of ui in case future refactor moves helpers
 	_ = ui.DeviceOption{}
 }
+
+// =============================================================================
+// T3: device install (US-02/07/09/10) — library push path
+// =============================================================================
+
+// helperDeviceInstallDeps builds Deps for install tests.
+func helperDeviceInstallDeps(store account.Store, svc *mockDeviceService, lib library.Store) Deps {
+	return Deps{
+		Store:         store,
+		LibraryStore:  lib,
+		DeviceService: svc,
+		UI:            &mockPrompter{},
+	}
+}
+
+func runDeviceInstallCmd(t *testing.T, deps Deps, args ...string) (string, error) {
+	t.Helper()
+	cmd := deviceInstallCmd(deps)
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs(args)
+	err := cmd.Execute()
+	return buf.String(), err
+}
+
+func ipaEntry(bundleID, version, path string, daysAgo int) library.Entry {
+	return library.Entry{
+		BundleID:     bundleID,
+		Version:      version,
+		FilePath:     path,
+		DownloadedAt: time.Now().UTC().AddDate(0, 0, -daysAgo),
+	}
+}
+
+// E2E-030 / AC-02-1: install happy (library has IPA, 1 device)
+func TestDeviceInstall_Happy_PushFromLibrary(t *testing.T) {
+	store := helperDownloadStore()
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1", Name: "iPhone"}}}
+	lib := &mockLibraryStore{entries: []library.Entry{ipaEntry("com.x", "1.0", "/lib/com.x.ipa", 1)}}
+	deps := helperDeviceInstallDeps(store, svc, lib)
+
+	out, err := runDeviceInstallCmd(t, deps, "com.x")
+	require.NoError(t, err)
+	assert.Contains(t, out, "Installed")
+	assert.Contains(t, out, "com.x")
+	assert.Contains(t, out, "1.0")
+	assert.Equal(t, "u1", svc.installUDID)
+	assert.Equal(t, "/lib/com.x.ipa", svc.installPath)
+}
+
+// E2E-030b / AC-02-4: install --udid valid in multi-device
+func TestDeviceInstall_UDID_SelectsDevice(t *testing.T) {
+	store := helperDownloadStore()
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "a"}, {UDID: "b"}}}
+	lib := &mockLibraryStore{entries: []library.Entry{ipaEntry("com.x", "1.0", "/lib/x.ipa", 1)}}
+	deps := helperDeviceInstallDeps(store, svc, lib)
+
+	_, err := runDeviceInstallCmd(t, deps, "com.x", "--udid", "b")
+	require.NoError(t, err)
+	assert.Equal(t, "b", svc.installUDID, "--udid b targets device b")
+}
+
+// E2E-033 / AC-02-8: install no active profile
+func TestDeviceInstall_NoActiveProfile(t *testing.T) {
+	store := &mockStore{activeID: "", credentials: map[string]bool{}}
+	deps := helperDeviceInstallDeps(store, &mockDeviceService{}, &mockLibraryStore{})
+	_, err := runDeviceInstallCmd(t, deps, "com.x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no active profile")
+}
+
+// E2E-060 / AC-10-1: install --version specific
+func TestDeviceInstall_Version_Specific(t *testing.T) {
+	store := helperDownloadStore()
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1"}}}
+	lib := &mockLibraryStore{entries: []library.Entry{
+		ipaEntry("com.x", "1.0", "/lib/v1.ipa", 5),
+		ipaEntry("com.x", "2.0", "/lib/v2.ipa", 1),
+	}}
+	deps := helperDeviceInstallDeps(store, svc, lib)
+
+	_, err := runDeviceInstallCmd(t, deps, "com.x", "--version", "1.0")
+	require.NoError(t, err)
+	assert.Equal(t, "/lib/v1.ipa", svc.installPath, "--version 1.0 pushes v1")
+}
+
+// E2E-061 / AC-10-2: install default = most-recently-downloaded
+func TestDeviceInstall_Default_MostRecent(t *testing.T) {
+	store := helperDownloadStore()
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1"}}}
+	lib := &mockLibraryStore{entries: []library.Entry{
+		ipaEntry("com.x", "1.0", "/lib/v1.ipa", 5), // older
+		ipaEntry("com.x", "2.0", "/lib/v2.ipa", 1), // newer
+	}}
+	deps := helperDeviceInstallDeps(store, svc, lib)
+
+	_, err := runDeviceInstallCmd(t, deps, "com.x")
+	require.NoError(t, err)
+	assert.Equal(t, "/lib/v2.ipa", svc.installPath, "default pushes most-recently-downloaded (v2)")
+}
+
+// E2E-062 / AC-10-3: install --version not in library
+func TestDeviceInstall_Version_NotInLibrary(t *testing.T) {
+	store := helperDownloadStore()
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1"}}}
+	lib := &mockLibraryStore{entries: []library.Entry{ipaEntry("com.x", "1.0", "/lib/v1.ipa", 1)}}
+	deps := helperDeviceInstallDeps(store, svc, lib)
+
+	_, err := runDeviceInstallCmd(t, deps, "com.x", "--version", "9.9")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "version '9.9' not in library")
+	assert.Equal(t, 0, svc.installCalls, "must not install on missing version")
+}
+
+// E2E-070 / AC-09-1: install --profile valid logged-in
+func TestDeviceInstall_Profile_Valid(t *testing.T) {
+	store := &mockStore{
+		profiles:    []account.Profile{{ID: "alice"}, {ID: "bob"}},
+		activeID:    "alice",
+		credentials: map[string]bool{"alice": true, "bob": true},
+	}
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1"}}}
+	lib := &mockLibraryStore{entries: []library.Entry{ipaEntry("com.x", "1.0", "/bob/x.ipa", 1)}}
+	deps := helperDeviceInstallDeps(store, svc, lib)
+
+	_, err := runDeviceInstallCmd(t, deps, "com.x", "--profile", "bob")
+	require.NoError(t, err)
+	assert.Equal(t, "bob", lib.getProfile, "uses bob's library")
+}
+
+// E2E-071 / AC-09-2: install --profile not-logged-in but library has IPA → push OK
+func TestDeviceInstall_Profile_NotLoggedIn_LibraryHas(t *testing.T) {
+	store := &mockStore{
+		profiles:    []account.Profile{{ID: "alice"}, {ID: "bob"}},
+		activeID:    "alice",
+		credentials: map[string]bool{"alice": true, "bob": false}, // bob not logged in
+	}
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1"}}}
+	lib := &mockLibraryStore{entries: []library.Entry{ipaEntry("com.x", "1.0", "/bob/x.ipa", 1)}}
+	deps := helperDeviceInstallDeps(store, svc, lib)
+
+	_, err := runDeviceInstallCmd(t, deps, "com.x", "--profile", "bob")
+	require.NoError(t, err, "cached push needs no credentials (AC-09-2)")
+	assert.Equal(t, 1, svc.installCalls)
+}
+
+// E2E-073 / AC-09-4: install --profile not found
+func TestDeviceInstall_Profile_NotFound(t *testing.T) {
+	store := helperDownloadStore()
+	deps := helperDeviceInstallDeps(store, &mockDeviceService{}, &mockLibraryStore{})
+	_, err := runDeviceInstallCmd(t, deps, "com.x", "--profile", "ghost")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "profile 'ghost' not found")
+}
+
+// E2E-091 / AC-07-2: install tunnel required
+func TestDeviceInstall_TunnelRequired(t *testing.T) {
+	store := helperDownloadStore()
+	svc := &mockDeviceService{
+		devices:    []device.DeviceInfo{{UDID: "u1"}},
+		installErr: device.ErrTunnelRequired,
+	}
+	lib := &mockLibraryStore{entries: []library.Entry{ipaEntry("com.x", "1.0", "/x.ipa", 1)}}
+	deps := helperDeviceInstallDeps(store, svc, lib)
+
+	_, err := runDeviceInstallCmd(t, deps, "com.x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "iOS 17+ tunnel required")
+	assert.Contains(t, err.Error(), "sudo ios tunnel start")
+}
+
+// E2E-032 / AC-02-7: install trust failure → hint
+func TestDeviceInstall_TrustError_Hint(t *testing.T) {
+	store := helperDownloadStore()
+	svc := &mockDeviceService{
+		devices:    []device.DeviceInfo{{UDID: "u1"}},
+		installErr: newTrustErr("device not paired"),
+	}
+	lib := &mockLibraryStore{entries: []library.Entry{ipaEntry("com.x", "1.0", "/x.ipa", 1)}}
+	deps := helperDeviceInstallDeps(store, svc, lib)
+
+	_, err := runDeviceInstallCmd(t, deps, "com.x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pair")
+	assert.Contains(t, err.Error(), "trust this Mac")
+}
+
+// E2E-034 / AC-02-9: device already has app → still pushes
+func TestDeviceInstall_DeviceHasApp_StillPushes(t *testing.T) {
+	store := helperDownloadStore()
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1"}}} // Install returns nil (success)
+	lib := &mockLibraryStore{entries: []library.Entry{ipaEntry("com.x", "1.0", "/x.ipa", 1)}}
+	deps := helperDeviceInstallDeps(store, svc, lib)
+
+	_, err := runDeviceInstallCmd(t, deps, "com.x")
+	require.NoError(t, err)
+	assert.Equal(t, 1, svc.installCalls, "push is unconditional (AC-02-9)")
+}
+
+// newTrustErr builds an error whose message triggers the trust heuristic.
+func newTrustErr(msg string) error { return errors.New(msg) }

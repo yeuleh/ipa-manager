@@ -97,7 +97,7 @@ T5 (device uninstall + 确认 + ErrAppNotInstalled)       ←─ 创建 uninstal
 - **Acceptance command**：`go build ./... && go vet ./... && go test ./internal/device/ ./internal/cli/ -count=1 && go test ./... -count=1`
 - **Rollback note**：纯增量（resolveDevice/SelectDevice/apps + ErrCancelled 等哨兵）；回滚 = revert。
 
-### T3 — device install（library 推送 + tunnel 分层 + tunnel info 复用）
+### T3 — device install（library 推送 + tunnel 分层 + tunnel info 复用）✅ COMPLETE
 
 - **US / AC / E2E**：US-02、US-07、US-09、US-10；AC-02-1/2/3/4/5/6/7/8/9、AC-07-2/4、AC-09-1/2/3/4、AC-10-1/2/3、AC-06-1~5（**install 路径**）；E2E-030/030b/031/032/033/034、E2E-022/023/024/025（install 多设备交互/非TTY/单台自动）、E2E-020/021（**install 分支**）、E2E-091/093/093b/093d、E2E-060/061/062、E2E-070/071/072/073。（AC-10-4 互斥与 E2E-063 归 T4，因 `--latest` 在 T4 注册。）
 - **目标**：`device install <bid>`（library 有 IPA 时推送）可用；DD-02 分层 tunnel 检测（connect 失败→ErrTunnelRequired，operate→原样）+ tunnel info 只读复用（iOS 17+ 用户启 tunnel 后 install 闭环）；`--udid`/`--version`/`--profile` flags。**T3 不注册 `--latest`**（T4 注册），故 AC-10-4 互斥校验在 T4 落地。
@@ -226,6 +226,12 @@ T5 (device uninstall + 确认 + ErrAppNotInstalled)       ←─ 创建 uninstal
 - [Minor] `service.go` 删除了无功能 `var _ = ios.DeviceEntry{}` 引用与多余 import。✅ 已处理。
 - [Minor] `Backend` 注释澄清：类型导出（供 internal/device 内测试 double 实现），但因 `internal/` 包边界不外泄。✅ 已处理。
 - [Minor/决议] "NeedsTunnel 显示"措辞澄清：AC-01-1 固定 4 列（UDID/Name/iOS Version/Connection Type），无 tunnel 列；`NeedsTunnel` 是内部字段（T3 tunnel 诊断输入）。tunnel 提示在 install 时（AC-07-2）而非 device list。✅ 已澄清（plan §T1 措辞已更正）。
+
+### T3（已 complete）
+- [Minor→已修] Spock Important 1 已修：`--version` 路径仅 `errors.Is(ErrEntryNotFound)` 映射 AC-10-3，其他存储错误→"failed to query library"。
+- [Minor→已修] Spock Important 2 已修：mockBackend.OpenInstaller 记录入参 entry，tunnel-reuse 测试断言 `openInstallerEntry.Rsd != nil`（核心不变量：RSD 注入的 entry 确实到达 OpenInstaller）。
+- [Minor→已修] Spock Important 3 已修：LookupTunnelInfo 加 httptest 直接单测（happy/404→errTunnelNotFound/500→非 not-found/invalid JSON），用 GO_IOS_AGENT_HOST/PORT env。
+- [Minor/决议] LookupTunnelInfo **本地重实现**（只读 HTTP GET，非 import ios/tunnel）——避免拖入 gvisor/quic-go 重依赖，NFR-03 更干净（连 tunnel 包都不 import）。go-ios HttpApiHost/Port 读 env，测试可注入。
 
 ### T2（已 complete）
 - [Minor] `ErrDeviceNotConnected` 哨兵未在 `--udid` 未连分支 `%w` 包装（当前用 `fmt.Errorf("device '%s' not connected")` 纯消息）。无 `errors.Is` 依赖，AC 不受影响；若未来需 `errors.Is` 可加包装。
