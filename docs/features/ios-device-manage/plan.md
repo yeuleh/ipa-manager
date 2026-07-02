@@ -232,6 +232,10 @@ T5 (device uninstall + 确认 + ErrAppNotInstalled)       ←─ 创建 uninstal
 - [Minor→已修] `ConfirmYes` 断言完整 `[y/N]` prompt。
 - [Minor/validate] `isNotInstalledErr` 字符串匹配（not installed/no such app/not found/does not exist）偏宽，validate 真机确认确切模式后收窄或改 pre-check（BrowseUserApps 确认存在）。
 - [Minor] uninstall 非交互消息用 AC-04-4 精确文案（"confirmation required in non-interactive mode; cannot proceed"），非复用 ErrDownloadNonInteractive。
+
+### execution 整体评审修复（Spock PASS-WITH-FIXES → 已修，转 PASS）
+- [Important→已修] AC-03-6 文案对齐：`apperr.ErrDownloadNonInteractive` 文本改为 "license acquisition requires interactive confirmation"，使 auto-download 非交互 license 错误产出 AC-03-6 精确文案（同时改进 download mission AC-02-11 合规；app_download_test 不 assert 旧文本，全绿 NFR-07）。
+- [Important→已修] install 设备选择变体直接 CLI 覆盖：`TestDeviceInstall_NoDevices`（AC-06-1）、`_UDIDNotConnected`（AC-06-2）、`_MultiDevice_InteractiveSelect`（AC-06-3）、`_ThenAppsShowsIt`（E2E-031 stateful：install 后 apps 可见）。
 - [Minor→已修] Spock Important 1 已修：downloadToLibrary 成功打印 `✓ Downloaded: ...`（AC-03-1 下载+安装两步可见）。
 - [Minor→已修] Spock Important 2 已修：`--latest` 的 LibraryStore.Get 错误不再忽略（surface "failed to query library"）。
 - [Minor→已修] license decline 不再重复打印 `cancelled`（handleLicenseRequired 已打印；runDeviceInstall 的 IPA-source cancel 分支不重打印；device-select cancel 仍打印）。
