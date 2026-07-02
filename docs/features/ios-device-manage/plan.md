@@ -112,7 +112,7 @@ T5 (device uninstall + 确认 + ErrAppNotInstalled)       ←─ 创建 uninstal
 - **Acceptance command**：`go build ./... && go vet ./... && go test ./internal/device/ ./internal/cli/ -count=1 && go test ./... -count=1`；NFR-03 审计：`! grep -Ern 'exec\.Command.*sudo|startTunnel|NewTunnelManager|ServeTunnelInfo' internal/`（无匹配则通过）；NFR-06：`! grep -rn 'danielpaulus/go-ios' internal/cli/`（无匹配则通过）
 - **Rollback note**：install 命令 + Service.Install/OpenInstaller/LookupTunnelInfo/withRsdProvider 新增；纯增量。回滚 = revert。
 
-### T4 — device install 自动下载 + `--latest`
+### T4 — device install 自动下载 + `--latest` ✅ COMPLETE
 
 - **US / AC / E2E**：US-03、US-08、AC-10-4；AC-03-1/2/3/4/5/6、AC-08-1/2/3、AC-10-4（`--latest`+`--version` 互斥）；E2E-040/041/042/043/044/045/046、E2E-050/051/052
 - **目标**：`device install <bid>`（library 缺 IPA）自动下载再推送；`--latest` 强制刷新 App Store 最新版；注册 `--latest` flag + 互斥校验。
@@ -226,6 +226,13 @@ T5 (device uninstall + 确认 + ErrAppNotInstalled)       ←─ 创建 uninstal
 - [Minor] `service.go` 删除了无功能 `var _ = ios.DeviceEntry{}` 引用与多余 import。✅ 已处理。
 - [Minor] `Backend` 注释澄清：类型导出（供 internal/device 内测试 double 实现），但因 `internal/` 包边界不外泄。✅ 已处理。
 - [Minor/决议] "NeedsTunnel 显示"措辞澄清：AC-01-1 固定 4 列（UDID/Name/iOS Version/Connection Type），无 tunnel 列；`NeedsTunnel` 是内部字段（T3 tunnel 诊断输入）。tunnel 提示在 install 时（AC-07-2）而非 device list。✅ 已澄清（plan §T1 措辞已更正）。
+
+### T4（已 complete）
+- [Minor→已修] Spock Important 1 已修：downloadToLibrary 成功打印 `✓ Downloaded: ...`（AC-03-1 下载+安装两步可见）。
+- [Minor→已修] Spock Important 2 已修：`--latest` 的 LibraryStore.Get 错误不再忽略（surface "failed to query library"）。
+- [Minor→已修] license decline 不再重复打印 `cancelled`（handleLicenseRequired 已打印；runDeviceInstall 的 IPA-source cancel 分支不重打印；device-select cancel 仍打印）。
+- [Minor→已修] `--latest` 测试断言 `addEntry.Version=="2.0"`（新版入库，旧版由 library.Store 多版本语义保留）。
+- [Minor/决议] downloadToLibrary **复用** app_download.go 的 handleDownloadError/license/token（非重写，非破坏——git diff app_download.go 空，app_download_test 全绿 NFR-07 证据）。
 
 ### T3（已 complete）
 - [Minor→已修] Spock Important 1 已修：`--version` 路径仅 `errors.Is(ErrEntryNotFound)` 映射 AC-10-3，其他存储错误→"failed to query library"。
