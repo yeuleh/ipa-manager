@@ -2,9 +2,13 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/99designs/keyring"
+
+	"github.com/yeuleh/ipa-manager/internal/account"
+	"github.com/yeuleh/ipa-manager/internal/apperr"
 )
 
 // isKeychainNotFound returns true if the error indicates the keychain key
@@ -19,4 +23,54 @@ func isKeychainNotFound(err error) bool {
 	// Fallback for backends that wrap differently.
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "not found") || strings.Contains(msg, "no match")
+}
+
+// resolveProfile resolves the target profile from --profile flag or active.
+// Returns ErrProfileNotFound / ErrProfileNotLoggedIn / ErrNoActiveProfile
+// with actionable hints (NFR-06).
+//
+// requireCredentials=true: validates that the profile has keychain credentials
+// (needed for search/download which call Apple API; not needed for library list/clean).
+func resolveProfile(deps Deps, profileFlag string, requireCredentials bool) (account.Profile, error) {
+	// Load config from disk (each CLI invocation is a new process; Store starts empty)
+	if err := deps.Store.Load(); err != nil {
+		return account.Profile{}, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	var profile account.Profile
+
+	if profileFlag != "" {
+		var err error
+		profile, err = deps.Store.Get(profileFlag)
+		if err != nil || (err == nil && profile.ID == "") {
+			if errors.Is(err, apperr.ErrProfileNotFound) || profile.ID == "" {
+				return account.Profile{}, fmt.Errorf("profile '%s' not found. Run `accounts list` to see available profiles", profileFlag)
+			}
+			return account.Profile{}, fmt.Errorf("failed to get profile: %w", err)
+		}
+	} else {
+		activeID, err := deps.Store.GetActiveID()
+		if err != nil {
+			return account.Profile{}, fmt.Errorf("failed to get active profile: %w", err)
+		}
+		if activeID == "" {
+			return account.Profile{}, fmt.Errorf("%w. Run `accounts use <profile-id>` to set one", apperr.ErrNoActiveProfile)
+		}
+		profile, err = deps.Store.Get(activeID)
+		if err != nil {
+			return account.Profile{}, fmt.Errorf("failed to get active profile: %w", err)
+		}
+	}
+
+	if requireCredentials {
+		has, err := deps.Store.HasCredentials(profile.ID)
+		if err != nil {
+			return account.Profile{}, fmt.Errorf("failed to check credentials: %w", err)
+		}
+		if !has {
+			return account.Profile{}, fmt.Errorf("profile '%s' has no credentials. Run `auth login` to authenticate", profile.ID)
+		}
+	}
+
+	return profile, nil
 }

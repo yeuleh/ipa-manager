@@ -31,7 +31,7 @@ type mockPrompter struct {
 	confirmCalled bool
 }
 
-func (m *mockPrompter) InputEmail() (string, error) { return m.email, m.emailErr }
+func (m *mockPrompter) InputEmail() (string, error)    { return m.email, m.emailErr }
 func (m *mockPrompter) InputPassword() (string, error) { return m.password, m.passwordErr }
 func (m *mockPrompter) InputAuthCode() (string, error) { return m.authCode, m.authCodeErr }
 func (m *mockPrompter) Confirm(string) (bool, error) {
@@ -50,6 +50,30 @@ type mockAppStore struct {
 	loginCalls   int
 	revokeErr    error
 	revokeCalled bool
+
+	// NEW (T1): query fields — zero-value defaults so auth tests are unaffected
+	accountInfoResult appstore.AccountInfoResult
+	accountInfoErr    error
+	accountInfoCalled bool
+	searchResults     []appstore.AppInfo
+	searchErr         error
+	searchCalled      bool
+	searchTerm        string
+	searchLimit       int64
+
+	// NEW (T3): download fields — slices for retry modeling (DD-12)
+	lookupResult     appstore.AppInfo
+	lookupErr        error
+	downloadResults  []appstore.DownloadResult
+	downloadErrors   []error
+	downloadCalls    int
+	replicateSinfErr error
+
+	// NEW (T4): retry methods
+	purchaseErr          error
+	purchaseCalled       bool
+	refreshSessionErr    error
+	refreshSessionCalled bool
 }
 
 func (m *mockAppStore) GetAuthEndpoint() (string, error) {
@@ -73,6 +97,53 @@ func (m *mockAppStore) Login(appstore.LoginInput) (appstore.LoginResult, error) 
 func (m *mockAppStore) Revoke() error {
 	m.revokeCalled = true
 	return m.revokeErr
+}
+
+// NEW (T1): query methods — zero-value defaults, auth tests don't call these
+func (m *mockAppStore) AccountInfo() (appstore.AccountInfoResult, error) {
+	m.accountInfoCalled = true
+	return m.accountInfoResult, m.accountInfoErr
+}
+
+func (m *mockAppStore) Search(query string, limit int64) ([]appstore.AppInfo, error) {
+	m.searchCalled = true
+	m.searchTerm = query
+	m.searchLimit = limit
+	return m.searchResults, m.searchErr
+}
+
+// NEW (T3): download methods
+func (m *mockAppStore) Lookup(string) (appstore.AppInfo, error) {
+	return m.lookupResult, m.lookupErr
+}
+
+func (m *mockAppStore) Download(appstore.DownloadInput) (appstore.DownloadResult, error) {
+	idx := m.downloadCalls
+	m.downloadCalls++
+	var result appstore.DownloadResult
+	var err error
+	if idx < len(m.downloadResults) {
+		result = m.downloadResults[idx]
+	}
+	if idx < len(m.downloadErrors) {
+		err = m.downloadErrors[idx]
+	}
+	return result, err
+}
+
+func (m *mockAppStore) ReplicateSinf([]appstore.Sinf, string) error {
+	return m.replicateSinfErr
+}
+
+// NEW (T4): retry methods
+func (m *mockAppStore) Purchase(string, int64, float64) error {
+	m.purchaseCalled = true
+	return m.purchaseErr
+}
+
+func (m *mockAppStore) RefreshSession() error {
+	m.refreshSessionCalled = true
+	return m.refreshSessionErr
 }
 
 // helperRunLoginCmd creates an authLoginCmd with the given Deps, captures
@@ -451,7 +522,7 @@ func TestAuthLogout_DefaultActive(t *testing.T) {
 	}
 	mockAS := &mockAppStore{}
 	deps := Deps{
-		Store: store,
+		Store:           store,
 		AppStoreFactory: func(account.Profile) (appstore.ProfileAppStore, error) { return mockAS, nil },
 		ConfigRoot:      "/tmp/test-config",
 	}
@@ -474,7 +545,7 @@ func TestAuthLogout_ExplicitProfile(t *testing.T) {
 	}
 	mockAS := &mockAppStore{}
 	deps := Deps{
-		Store: store,
+		Store:           store,
 		AppStoreFactory: func(account.Profile) (appstore.ProfileAppStore, error) { return mockAS, nil },
 		ConfigRoot:      "/tmp/test",
 	}
@@ -512,7 +583,7 @@ func TestAuthLogout_AlreadyLoggedOut_Idempotent(t *testing.T) {
 	}
 	mockAS := &mockAppStore{}
 	deps := Deps{
-		Store: store,
+		Store:           store,
 		AppStoreFactory: func(account.Profile) (appstore.ProfileAppStore, error) { return mockAS, nil },
 		ConfigRoot:      "/tmp/test",
 	}
@@ -530,7 +601,7 @@ func TestAuthLogout_PreservesMetadata(t *testing.T) {
 	}
 	mockAS := &mockAppStore{}
 	deps := Deps{
-		Store: store,
+		Store:           store,
 		AppStoreFactory: func(account.Profile) (appstore.ProfileAppStore, error) { return mockAS, nil },
 		ConfigRoot:      "/tmp/test",
 	}
@@ -555,7 +626,7 @@ func TestAuthLogout_DoubleLogout_Idempotent(t *testing.T) {
 	}
 	mockAS := &mockAppStore{}
 	deps := Deps{
-		Store: store,
+		Store:           store,
 		AppStoreFactory: func(account.Profile) (appstore.ProfileAppStore, error) { return mockAS, nil },
 		ConfigRoot:      "/tmp/test",
 	}
@@ -576,7 +647,7 @@ func TestAuthLogout_RevokeFailure_ReportsError(t *testing.T) {
 	}
 	mockAS := &mockAppStore{revokeErr: errors.New("keychain locked")}
 	deps := Deps{
-		Store: store,
+		Store:           store,
 		AppStoreFactory: func(account.Profile) (appstore.ProfileAppStore, error) { return mockAS, nil },
 		ConfigRoot:      "/tmp/test",
 	}

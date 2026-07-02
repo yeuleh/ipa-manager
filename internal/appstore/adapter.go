@@ -14,15 +14,43 @@ import (
 // ipatool's AppStore has 12 methods, we use 3 (ISP — Interface Segregation).
 type ProfileAppStore interface {
 	// GetAuthEndpoint calls ipatool's Bag() and returns the auth endpoint URL.
-	// Must be called before Login to obtain the Endpoint field.
 	GetAuthEndpoint() (string, error)
 
 	// Login authenticates with Apple. Returns ErrAuthCodeRequired if 2FA is needed.
-	// On success, persists account JSON to keychain via ProfileKeychain.
 	Login(input LoginInput) (LoginResult, error)
 
 	// Revoke removes the profile's credentials from keychain.
 	Revoke() error
+
+	// AccountInfo reads the cached Account from keychain.
+	// Must be called before Lookup/Search/Download (adapter caches the full Account).
+	// Does NOT expose Password/PasswordToken (NFR-04).
+	AccountInfo() (AccountInfoResult, error)
+
+	// Search queries the App Store for apps matching the term.
+	// Uses the cached Account's StoreFront for region-scoped results.
+	Search(query string, limit int64) ([]AppInfo, error)
+
+	// Lookup looks up a single app by bundle-id.
+	// Must be called after AccountInfo.
+	Lookup(bundleID string) (AppInfo, error)
+
+	// Download downloads the IPA to OutputPath (directory or file).
+	// Must be called after AccountInfo + Lookup.
+	Download(input DownloadInput) (DownloadResult, error)
+
+	// ReplicateSinf writes DRM decryption keys into the downloaded IPA.
+	// Must be called after Download for the IPA to be installable.
+	ReplicateSinf(sinfs []Sinf, packagePath string) error
+
+	// Purchase acquires a free-app license (price must be 0).
+	// Must be called after AccountInfo. Used for license-required retry.
+	Purchase(bundleID string, appID int64, price float64) error
+
+	// RefreshSession re-authenticates using cached Account.Password.
+	// Must be called after AccountInfo. Used for token-expired retry.
+	// Does NOT expose Password to callers (NFR-04).
+	RefreshSession() error
 }
 
 // LoginInput is our version of ipatool's appstore.LoginInput.

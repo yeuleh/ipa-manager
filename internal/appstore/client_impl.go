@@ -11,6 +11,7 @@ import (
 	ipakeychain "github.com/majd/ipatool/v2/pkg/keychain"
 	"github.com/majd/ipatool/v2/pkg/util/machine"
 	"github.com/majd/ipatool/v2/pkg/util/operatingsystem"
+	"github.com/schollz/progressbar/v3"
 
 	"github.com/yeuleh/ipa-manager/internal/account"
 )
@@ -23,7 +24,8 @@ var keyringOpener = keyring.Open
 // interface. This is the ONLY place in the codebase that imports ipatool's
 // appstore package for method calls. All ipatool API changes are confined here.
 type profileAppStoreAdapter struct {
-	inner ipaappstore.AppStore
+	inner   ipaappstore.AppStore
+	account *ipaappstore.Account // cached after AccountInfo(); used by Lookup/Search/Download/Purchase
 }
 
 func (a *profileAppStoreAdapter) GetAuthEndpoint() (string, error) {
@@ -53,6 +55,121 @@ func (a *profileAppStoreAdapter) Login(input LoginInput) (LoginResult, error) {
 
 func (a *profileAppStoreAdapter) Revoke() error {
 	return a.inner.Revoke()
+}
+
+func (a *profileAppStoreAdapter) AccountInfo() (AccountInfoResult, error) {
+	out, err := a.inner.AccountInfo()
+	if err != nil {
+		return AccountInfoResult{}, err
+	}
+	// Cache full account for subsequent Lookup/Search/Download/Purchase calls.
+	a.account = &out.Account
+	return AccountInfoResult{
+		Email:      out.Account.Email,
+		Name:       out.Account.Name,
+		StoreFront: out.Account.StoreFront,
+	}, nil
+}
+
+func (a *profileAppStoreAdapter) Search(query string, limit int64) ([]AppInfo, error) {
+	if a.account == nil {
+		return nil, fmt.Errorf("AccountInfo must be called before Search")
+	}
+	out, err := a.inner.Search(ipaappstore.SearchInput{
+		Account: *a.account,
+		Term:    query,
+		Limit:   limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	results := make([]AppInfo, len(out.Results))
+	for i, app := range out.Results {
+		results[i] = appToAppInfo(app)
+	}
+	return results, nil
+}
+
+func (a *profileAppStoreAdapter) Lookup(bundleID string) (AppInfo, error) {
+	if a.account == nil {
+		return AppInfo{}, fmt.Errorf("AccountInfo must be called before Lookup")
+	}
+	out, err := a.inner.Lookup(ipaappstore.LookupInput{
+		Account:  *a.account,
+		BundleID: bundleID,
+	})
+	if err != nil {
+		return AppInfo{}, err
+	}
+	return appToAppInfo(out.App), nil
+}
+
+func (a *profileAppStoreAdapter) Download(input DownloadInput) (DownloadResult, error) {
+	if a.account == nil {
+		return DownloadResult{}, fmt.Errorf("AccountInfo must be called before Download")
+	}
+	var pb *progressbar.ProgressBar
+	if input.Progress != nil {
+		if w, ok := input.Progress.(*progressBarWrapper); ok {
+			pb = w.inner
+		}
+	}
+	out, err := a.inner.Download(ipaappstore.DownloadInput{
+		Account:           *a.account,
+		App:               appInfoToApp(input.BundleID, input.AppID),
+		OutputPath:        input.OutputPath,
+		Progress:          pb,
+		ExternalVersionID: input.ExternalVersionID,
+	})
+	if err != nil {
+		return DownloadResult{}, mapDownloadError(err)
+	}
+	return DownloadResult{
+		DestinationPath: out.DestinationPath,
+		Version:         extractVersionFromPath(out.DestinationPath),
+		Sinfs:           sinfsToOur(out.Sinfs),
+	}, nil
+}
+
+func (a *profileAppStoreAdapter) ReplicateSinf(sinfs []Sinf, packagePath string) error {
+	ipaSinfs := make([]ipaappstore.Sinf, len(sinfs))
+	for i, s := range sinfs {
+		ipaSinfs[i] = ipaappstore.Sinf{ID: s.ID, Data: s.Data}
+	}
+	return a.inner.ReplicateSinf(ipaappstore.ReplicateSinfInput{
+		Sinfs:       ipaSinfs,
+		PackagePath: packagePath,
+	})
+}
+
+func (a *profileAppStoreAdapter) Purchase(bundleID string, appID int64, price float64) error {
+	if a.account == nil {
+		return fmt.Errorf("AccountInfo must be called before Purchase")
+	}
+	return a.inner.Purchase(ipaappstore.PurchaseInput{
+		Account: *a.account,
+		App:     ipaappstore.App{ID: appID, BundleID: bundleID, Price: price},
+	})
+}
+
+func (a *profileAppStoreAdapter) RefreshSession() error {
+	if a.account == nil {
+		return fmt.Errorf("AccountInfo must be called before RefreshSession")
+	}
+	bag, err := a.inner.Bag(ipaappstore.BagInput{})
+	if err != nil {
+		return fmt.Errorf("failed to get auth endpoint for re-login: %w", err)
+	}
+	output, err := a.inner.Login(ipaappstore.LoginInput{
+		Email:    a.account.Email,
+		Password: a.account.Password,
+		Endpoint: bag.AuthEndpoint,
+	})
+	if err != nil {
+		return err
+	}
+	a.account = &output.Account // update cached account with fresh token
+	return nil
 }
 
 // NewProfileAppStore constructs a ProfileAppStore scoped to a single account
