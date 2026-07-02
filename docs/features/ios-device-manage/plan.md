@@ -80,7 +80,7 @@ T5 (device uninstall + 确认 + ErrAppNotInstalled)       ←─ 创建 uninstal
 
 ### T2 — device apps + resolveDevice + SelectDevice
 
-- **US / AC / E2E**：US-05、US-06（**仅经 apps 命令可验证的子集**）；AC-05-1/2/3/4、AC-06-1/2/3/4/5（apps 变体）、AC-09-5（apps 分支）；E2E-010/011/012、E2E-026/028（apps 多设备）、E2E-020/021（**apps 变体**——0 设备/--udid 未连，经 apps 命令验证）、E2E-022/023/024/025（**apps 变体**——多设备交互/非TTY/单台自动，经 apps 验证）、E2E-074（apps 拒 `--profile` 分支）、E2E-092（**apps tunnel 分支**）
+- **US / AC / E2E**：US-05、US-06（**仅经 apps 命令可验证的子集**）；AC-05-1/2/3/4、AC-06-1/2/3/4/5（apps 路径）、AC-09-5（apps 分支）；E2E-010/011/012、E2E-026/028（apps 多设备交互/非TTY）、E2E-020/021（**apps 分支**——0 设备/--udid 未连，经 apps 命令验证）、E2E-074（apps 拒 `--profile` 分支）、E2E-092（**apps tunnel 分支**）。注：AC-06-3/4/5 的"多设备交互/非TTY/单台自动"经 apps 路径补 **supplementary CLI 测试**（由 AC-06 派生，不复用 e2e_test.md 中 E2E-022~025 的 install 用例 ID；那些 ID 在 e2e_test.md 中属 install 命令，归 T3）。
 - **目标**：`device apps` 可用；引入 `resolveDevice`（被 install/uninstall 复用）+ `ui.SelectDevice`+`ErrCancelled`。**install/uninstall 的选择路径 E2E 延后到 T3/T5**（命令尚未存在）。
 - **新建文件**：
   - `internal/cli/device_helpers.go` — `resolveDevice(deps, udidFlag) (device.DeviceInfo, error)`（AC-06-1~5：0 台/`--udid` 未连/单台自动/多台 TTY 交互/多台非TTY 报错；SelectDevice 返回 ErrCancelled→CLI "cancelled" exit 0）
@@ -99,9 +99,8 @@ T5 (device uninstall + 确认 + ErrAppNotInstalled)       ←─ 创建 uninstal
 
 ### T3 — device install（library 推送 + tunnel 分层 + tunnel info 复用）
 
-- **US / AC / E2E**：US-02、US-07、US-09、US-10；AC-02-1/2/3/4/5/6/7/8/9、AC-07-2/4、AC-09-1/2/3/4、AC-10-1/2/3/4、AC-06-1~5（**install 变体**）；E2E-030/030b/031/032/033/034、E2E-022/023/024/025（**install 变体**）、E2E-020/021（**install 变体**）、E2E-091/093/093b/093d、E2E-060/061/062/063、E2E-070/071/072/073、E2E-074（install 接受 `--profile` 故无 unknown-flag 分支；list/apps 拒绝已在 T1/T2）
-- **目标**：`device install <bid>`（library 有 IPA 时推送）可用；DD-02 分层 tunnel 检测（connect 失败→ErrTunnelRequired，operate→原样）+ tunnel info 只读复用（iOS 17+ 用户启 tunnel 后 install 闭环）；`--udid`/`--version`/`--profile` flags；`--latest`+`--version` 互斥（AC-10-4，但 `--latest` 实现在 T4，此处仅互斥校验 + 提示"auto-download 未实现"或直接报错——见 decision note）。
-  - **Decision note（`--latest` 互斥）**：T3 实现 `--latest`+`--version` 同传报错（AC-10-4）。T3 若传 `--latest` 但无 auto-download，则报 `"--latest requires download capability (T4)"` 或直接在 T3 内不支持 `--latest`（cobra 不注册该 flag，待 T4 注册）。**采后者**：T3 不注册 `--latest` flag（T4 注册）；AC-10-4 互斥校验随 T4 落地。
+- **US / AC / E2E**：US-02、US-07、US-09、US-10；AC-02-1/2/3/4/5/6/7/8/9、AC-07-2/4、AC-09-1/2/3/4、AC-10-1/2/3、AC-06-1~5（**install 路径**）；E2E-030/030b/031/032/033/034、E2E-022/023/024/025（install 多设备交互/非TTY/单台自动）、E2E-020/021（**install 分支**）、E2E-091/093/093b/093d、E2E-060/061/062、E2E-070/071/072/073。（AC-10-4 互斥与 E2E-063 归 T4，因 `--latest` 在 T4 注册。）
+- **目标**：`device install <bid>`（library 有 IPA 时推送）可用；DD-02 分层 tunnel 检测（connect 失败→ErrTunnelRequired，operate→原样）+ tunnel info 只读复用（iOS 17+ 用户启 tunnel 后 install 闭环）；`--udid`/`--version`/`--profile` flags。**T3 不注册 `--latest`**（T4 注册），故 AC-10-4 互斥校验在 T4 落地。
 - **新建文件**：
   - `internal/cli/device_install.go` — install 命令编排（决策树 §3.3 的 **library 有** 路径：resolveProfile(requireCreds=false) → resolveDevice → LibraryStore.Get/GetVersion/mostRecentByDownloadedAt → DeviceService.Install）；`downloadToLibrary` 函数**不在此 task**（T4 实现）
 - **修改文件**：
@@ -177,9 +176,9 @@ T5 (device uninstall + 确认 + ErrAppNotInstalled)       ←─ 创建 uninstal
 | E2E-090（list iOS17+ 可见） | T1 | E2E-050/051/052 | T4 |
 | E2E-010/011/012 | T2 | E2E-060/061/062 | T3 |
 | E2E-026/028（apps 多设备） | T2 | E2E-063（互斥） | T4 |
-| E2E-020/021/022/023/024/025 apps 变体 | T2 | E2E-070/071/072/073 | T3 |
+| E2E-020/021 apps 分支 + AC-06 supplementary（apps 路径） | T2 | E2E-070/071/072/073 | T3 |
 | E2E-074 apps 分支 / E2E-092 apps 分支 | T2 | E2E-030/030b/031/032/033/034 | T3 |
-| E2E-020/021/022/023/024/025 install 变体 | T3 | E2E-091/093/093b/093d | T3 |
+| E2E-020/021/022/023/024/025（install 命令用例） | T3 | E2E-091/093/093b/093d | T3 |
 | E2E-080~085 | T5 | E2E-027（uninstall 多设备） | T5 |
 | E2E-020/021 uninstall 变体 / E2E-074 uninstall 分支 | T5 | E2E-092 uninstall 分支 | T5 |
 | E2E-074 list 分支 | T1 | E2E-100（go-ios 隔离 grep） | T3（NFR-06 审计） |
