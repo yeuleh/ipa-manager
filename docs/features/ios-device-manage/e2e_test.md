@@ -40,7 +40,7 @@
 | E2E-001 | AC-01-1 | happy `[AUTO]` | Given mock DeviceService 返回 1 台设备（UDID/Name/版本/USB）；When `device list`；Then 表格输出含 UDID+Name+iOSVersion+"USB"，exit 0 |
 | E2E-002 | AC-01-2 | edge `[AUTO]` | Given mock 返回 0 台；When `device list`；Then stdout 含 `"no connected device"`，exit 0 |
 | E2E-003 | AC-01-3 | happy `[AUTO]` | Given mock 返回 3 台；When `device list`；Then 3 行设备各含完整 UDID，exit 0 |
-| E2E-004 | AC-01-1/AC-07-1 | edge `[AUTO]` | Given mock 返回 1 台 NeedsTunnel=true 且 Name/IOSVersion=""（lockdown 失败）；When `device list`；Then 该设备仍被列出（UDID+ConnectionType 可见，Name/版本为占位），exit 0 |
+| E2E-004 | AC-01-1/AC-07-1 | edge `[AUTO]` | Given mock 返回 1 台（GetLockdownInfo 失败→版本未知，Name/IOSVersion=""，NeedsTunnel=false）；When `device list`；Then 该设备仍被列出（UDID+ConnectionType 可见，Name/版本为占位），exit 0 |
 
 ### device apps（US-05）
 
@@ -133,15 +133,16 @@
 
 ### iOS 17+ tunnel（US-07）
 
-> tunnel 检测为版本感知+失败驱动（design DD-02）：mock 在 `device.Service` 层注入——CLI 测试让 mock ListInstalledApps/Install/Uninstall 在 iOS 17+ 场景返回 `ErrTunnelRequired`；device 包单测（mock Backend）验证 `diagnoseServiceError` 把 iOS≥17 的 Backend 错误翻译为 ErrTunnelRequired。
+> tunnel 检测分层（design DD-02）：连接阶段失败（OpenInstaller/OpenInstallationProxy）+ iOS≥17 已配对 → ErrTunnelRequired；操作阶段错误原样上浮。device 包单测（mock Backend）验证分层：OpenInstaller 返回 error 时返回的 InstallerConn 的 SendFile **未被调用**（连接失败→操作不可达，oracle 可证）。
 
 | ID | AC | type | Given/When/Then |
 |----|----|------|-----------------|
-| E2E-090 | AC-07-1 | happy `[AUTO]` | Given mock DeviceService.ListConnected 返回 1 台 NeedsTunnel=true（iOS≥17）；When `device list`；Then 该设备被列出（usbmuxd 可见），exit 0 |
-| E2E-091 | AC-07-2 | failure `[AUTO]` | Given LibraryStore 有 IPA + mock DeviceService.Install 返回 ErrTunnelRequired；When `device install <bid>`；Then 输出含 `"iOS 17+ tunnel required; run: sudo ios tunnel start"`，exit 1；**oracle**：mock Install 被调用并返回 ErrTunnelRequired（边界副作用），且 install 编排不再有后续推送动作（Service 是边界，其内部 SendFile 未达由 device 包单测验证） |
+| E2E-090 | AC-07-1 | happy `[AUTO]` | Given mock DeviceService.ListConnected 返回 1 台 NeedsTunnel=true（GetLockdownInfo 返回 version=17.5）；When `device list`；Then 该设备被列出（usbmuxd 可见），exit 0 |
+| E2E-091 | AC-07-2 | failure `[AUTO]` | Given LibraryStore 有 IPA + mock DeviceService.Install 返回 ErrTunnelRequired；When `device install <bid>`；Then 输出含 `"iOS 17+ tunnel required; run: sudo ios tunnel start"`，exit 1 |
 | E2E-092 | AC-07-3 | failure `[AUTO]` | Given mock ListInstalledApps 返回 ErrTunnelRequired；When `device apps`；Then 同 tunnel 提示，exit 1（同验证 uninstall 一例） |
-| E2E-093 | AC-07-4 | NFR `[AUTO]`+审计 | Given 源码；When grep 执行路径；Then 无 `exec.Command("sudo"...)` / 无 `tunnel` 包 import 于 cli+device 执行路径；CLI 行为：缺 tunnel 时仅打印提示 exit 1，不请求密码 |
-| E2E-093b | DD-02 | unit `[AUTO]` | Given device 包单测 mock Backend.SendFile 返回 generic err + GetProductVersion 返回 "17.5"；When Service.Install；Then 返回 ErrTunnelRequired（iOS≥17 定向）。另：GetProductVersion="16.0" + 同 err → 原样上浮（不误判 tunnel） |
+| E2E-093 | AC-07-4 | NFR `[AUTO]`+审计 | Given 源码；When grep 执行路径；Then 无 `exec.Command("sudo"...)`、无 go-ios tunnel START 调用（`startTunnel`/`NewTunnelManager*`/`ServeTunnelInfo`）；**允许**只读 `TunnelInfoForDevice`（HTTP 查询）。CLI 行为：缺 tunnel 时仅打印提示 exit 1，不请求密码 |
+| E2E-093b | DD-02 分层 | unit `[AUTO]` | Given device 包单测：mock Backend.OpenInstaller 返回 error（连接失败）+ InstallerConn mock；When Service.Install；Then 返回 ErrTunnelRequired（iOS≥17）或原样（iOS<17），**且 InstallerConn.SendFile 断言未被调用**（连接失败→操作不可达）。另：OpenInstaller 成功 + SendFile 返回 generic err → 原样上浮（**不**误判 tunnel） |
+| E2E-093d | DD-02 闭环 | happy `[AUTO]` | Given mock：iOS≥17 设备 + Backend.LookupTunnelInfo 返回 (addr,port,nil) + OpenInstaller(nil)+SendFile(nil)；When Service.Install；Then LookupTunnelInfo 被调、OpenInstaller 收到注入 RSD 的 entry、SendFile 成功，exit 0（用户启 tunnel 后 install 闭环） |
 | E2E-093c | AC-07-3 | NFR `[MANUAL]` | Given iOS 17+ 真机未启 tunnel；When `device apps`/`device uninstall`；Then **观察**：若成功（installationproxy 走 usbmuxd）→ AC-07-3 对 apps/uninstall 不适用（regress requirements 收窄）；若失败 → 触发 tunnel 提示。validate 阶段定论 |
 
 ### NFR 审计与回归
@@ -201,7 +202,7 @@
 | | AC-06-5 | E2E-025 | ✅ |
 | US-07 tunnel | AC-07-1 | E2E-090 | ✅ |
 | | AC-07-2 | E2E-091, E2E-093b | ✅ |
-| | AC-07-3 | E2E-092, E2E-093c | ✅（apps/uninstall 适用性 validate 定论） |
+| | AC-07-3 | E2E-092, E2E-093c | ✅（条件性：apps/uninstall 真失败时触发；installationproxy 走 usbmuxd 大概率成功→适用性 validate 定论，若证伪则 regress requirements 收窄） |
 | | AC-07-4 | E2E-093 | ✅ |
 | US-08 --latest | AC-08-1 | E2E-050 | ✅ |
 | | AC-08-2 | E2E-051 | ✅ |
@@ -222,7 +223,7 @@
 
 | 层 | 文件 | 覆盖 |
 |----|------|------|
-| device 包单测 | `internal/device/service_test.go` | mock Backend：ListConnected 映射 DeviceInfo（含 lockdown 失败 best-effort）/ DD-02 版本感知诊断（iOS≥17 错误→ErrTunnelRequired，iOS<17 原样）/ BrowseUserApps→InstalledApp 映射 / Install 调 zipconduit / Uninstall 调 installationproxy / ErrAppNotInstalled 识别 |
+| device 包单测 | `internal/device/service_test.go` | mock Backend：ListConnected 映射 DeviceInfo（含 lockdown 失败 best-effort）/ DD-02 分层诊断（connect 失败 iOS≥17→ErrTunnelRequired、operate 错误原样）/ connect 失败时 InstallerConn/ProxyConn 操作方法未被调用 / LookupTunnelInfo 复用路径 / BrowseUserApps→InstalledApp 映射 / ErrAppNotInstalled 识别 |
 | CLI E2E | `internal/cli/device_test.go` | 上表全部 `[AUTO]` E2E case |
 | 既有 mock 复用 | `mockStore`/`mockAppStore`/`mockLibraryStore`（已存在） | profile/AppStore/library 注入 |
 | 新 mock | `mockDeviceService`（实现 device.Service） | 记录 Install/Uninstall/ListConnected/ListInstalledApps 调用参数 + 可配置返回值/错误 |
