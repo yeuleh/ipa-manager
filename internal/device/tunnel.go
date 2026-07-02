@@ -31,3 +31,21 @@ func isIOS17OrLater(version string) bool {
 	}
 	return major >= 17
 }
+
+// diagnoseConnectError maps a connect-stage failure to our semantics. It is
+// ONLY applied to service-connection errors (Backend.Open*), never to
+// operate-stage errors (SendFile/Browse/Uninstall).
+//
+// Rationale: GetLockdownInfo success implies the device is paired/trusted, so a
+// connect-stage failure on iOS ≥17 is the missing tunnel (zipconduit/install
+// path); the same connect failure on iOS <17 or when the version is unknown
+// (untrusted) is surfaced raw (trust/usbmuxd issue), not assumed to be tunnel.
+func diagnoseConnectError(err error, version string) error {
+	if err == nil {
+		return nil
+	}
+	if isIOS17OrLater(version) {
+		return ErrTunnelRequired
+	}
+	return err
+}

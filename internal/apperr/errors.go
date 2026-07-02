@@ -33,3 +33,19 @@ var (
 	ErrPaidAppNotSupported    = errors.New("paid apps are not supported")
 	ErrDownloadNonInteractive = errors.New("interactive confirmation required")
 )
+
+// Device sentinels (mission: ios-device-manage).
+var (
+	// ErrCancelled is returned when the user aborts an interactive prompt
+	// (device selection, license confirmation). Treated as exit 0 (not an
+	// error outcome).
+	ErrCancelled = errors.New("cancelled")
+
+	// ErrDeviceNotConnected indicates no connected device, or a --udid that
+	// does not match any connected device.
+	ErrDeviceNotConnected = errors.New("no connected device")
+
+	// ErrMultipleDevices indicates more than one device is connected and none
+	// was selected via --udid (and interactive selection is unavailable).
+	ErrMultipleDevices = errors.New("multiple devices connected")
+)

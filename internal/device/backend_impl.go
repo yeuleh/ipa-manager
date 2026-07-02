@@ -2,6 +2,7 @@ package device
 
 import (
 	"github.com/danielpaulus/go-ios/ios"
+	"github.com/danielpaulus/go-ios/ios/installationproxy"
 )
 
 // defaultBackend is the production Backend that calls real go-ios.
@@ -34,4 +35,9 @@ func (defaultBackend) GetLockdownInfo(entry ios.DeviceEntry) (name, version stri
 		return "", "", err
 	}
 	return resp.Value.DeviceName, resp.Value.ProductVersion, nil
+}
+
+// OpenInstallationProxy opens the installation_proxy service over usbmuxd.
+func (defaultBackend) OpenInstallationProxy(entry ios.DeviceEntry) (ProxyConn, error) {
+	return installationproxy.New(entry)
 }

@@ -2,6 +2,7 @@ package device
 
 import (
 	"github.com/danielpaulus/go-ios/ios"
+	"github.com/danielpaulus/go-ios/ios/installationproxy"
 )
 
 // Backend abstracts go-ios device calls. The type is exported so it can be
@@ -22,4 +23,18 @@ type Backend interface {
 	// GetLockdownInfo returns DeviceName + ProductVersion via lockdown
 	// (ios.GetValues). Used for DeviceInfo enrichment and tunnel diagnosis.
 	GetLockdownInfo(entry ios.DeviceEntry) (name, version string, err error)
+	// OpenInstallationProxy opens the installation_proxy service over usbmuxd
+	// (installationproxy.New). Connect-stage: failure on iOS 17+ (rare, since
+	// installationproxy uses usbmuxd lockdown) is diagnosed by the Service.
+	OpenInstallationProxy(entry ios.DeviceEntry) (ProxyConn, error)
+}
+
+// ProxyConn wraps installationproxy.Connection for the operate stage
+// (BrowseUserApps / Uninstall). Package-internal; go-ios types appear here.
+// T2 implements BrowseUserApps + Close; T5 adds Uninstall.
+type ProxyConn interface {
+	// BrowseUserApps lists user-installed apps (excludes system apps).
+	BrowseUserApps() ([]installationproxy.AppInfo, error)
+	// Close releases the service connection.
+	Close()
 }
