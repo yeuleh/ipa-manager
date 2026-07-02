@@ -7,6 +7,8 @@
 package device
 
 import (
+	"fmt"
+
 	"github.com/danielpaulus/go-ios/ios"
 )
 
@@ -30,6 +32,11 @@ type Service interface {
 	// ListInstalledApps lists user-installed apps on a device (excludes system
 	// apps). Connect-stage failure on iOS 17+ (rare) → ErrTunnelRequired.
 	ListInstalledApps(udid string) ([]InstalledApp, error)
+	// Install pushes a local IPA to a device. On iOS 17+, reuses a running
+	// tunnel (read-only query) so zipconduit routes via the shim; without a
+	// tunnel, connect-stage fails → ErrTunnelRequired. Operate-stage errors
+	// (device rejects the IPA) surface raw.
+	Install(udid, ipaPath string) error
 }
 
 // NewService constructs a Service backed by the given Backend.
@@ -105,4 +112,29 @@ func (s *backendService) ListInstalledApps(udid string) ([]InstalledApp, error) 
 		}
 	}
 	return result, nil
+}
+
+// Install implements Service.Install (design DD-02 layered + tunnel-info reuse).
+func (s *backendService) Install(udid, ipaPath string) error {
+	entry, _, version, err := s.resolveEntry(udid)
+	if err != nil {
+		return err
+	}
+	// iOS 17+: try to reuse a running tunnel (read-only HTTP query, no sudo) so
+	// OpenInstaller routes via the shim path. If no tunnel is running, skip —
+	// OpenInstaller stays on usbmuxd, which fails on iOS 17+ → ErrTunnelRequired.
+	if isIOS17OrLater(version) {
+		if addr, port, e := s.backend.LookupTunnelInfo(udid); e == nil {
+			if entry, err = s.backend.WithRsd(entry, udid, addr, port); err != nil {
+				return fmt.Errorf("failed to use tunnel: %w", err)
+			}
+		}
+		// e != nil (no tunnel) → fall through; connect will fail → ErrTunnelRequired.
+	}
+	conn, err := s.backend.OpenInstaller(entry) // connect-stage
+	if err != nil {
+		return diagnoseConnectError(err, version) // iOS≥17 paired → ErrTunnelRequired; else raw
+	}
+	defer conn.Close()
+	return conn.SendFile(ipaPath) // operate-stage → raw (never misjudged as tunnel)
 }

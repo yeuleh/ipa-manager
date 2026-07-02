@@ -27,6 +27,19 @@ type Backend interface {
 	// (installationproxy.New). Connect-stage: failure on iOS 17+ (rare, since
 	// installationproxy uses usbmuxd lockdown) is diagnosed by the Service.
 	OpenInstallationProxy(entry ios.DeviceEntry) (ProxyConn, error)
+	// OpenInstaller opens the zipconduit service for IPA install
+	// (zipconduit.New). Connect-stage: on iOS 17+ without a tunnel this fails
+	// (Apple removed the usbmuxd zipconduit channel); diagnosed by the Service.
+	OpenInstaller(entry ios.DeviceEntry) (InstallerConn, error)
+	// LookupTunnelInfo queries a running tunnel agent (read-only HTTP GET to
+	// 127.0.0.1:60105) for the device's tunnel address + RSD port. Returns an
+	// error (e.g. tunnel.ErrTunnelNotFound) when no tunnel is running — no sudo.
+	LookupTunnelInfo(udid string) (address string, rsdPort int, err error)
+	// WithRsd injects the RSD provider (from a running tunnel) into a device
+	// entry so OpenInstaller routes via the shim path. Mirrors go-ios's
+	// deviceWithRsdProvider. Does NOT copy UserspaceTUN (this tool does not run
+	// userspace tunnels).
+	WithRsd(entry ios.DeviceEntry, udid, address string, rsdPort int) (ios.DeviceEntry, error)
 }
 
 // ProxyConn wraps installationproxy.Connection for the operate stage
@@ -37,4 +50,14 @@ type ProxyConn interface {
 	BrowseUserApps() ([]installationproxy.AppInfo, error)
 	// Close releases the service connection.
 	Close()
+}
+
+// InstallerConn wraps zipconduit.Connection for the operate stage (SendFile).
+// Package-internal; go-ios types appear here.
+type InstallerConn interface {
+	// SendFile pushes a local IPA to the device (operate-stage: errors here are
+	// surfaced raw, never misjudged as tunnel — tunnel is connect-stage only).
+	SendFile(ipaPath string) error
+	// Close releases the service connection.
+	Close() error
 }
