@@ -65,7 +65,7 @@
 - CLI 命令树重构：统一 `device` 命令组（`device list` / `device apps` / `device install` / `device uninstall`），移除旧 `devices` 单命令与 `install push/uninstall/update` 组。
 - **install 编排**：library 有 → 推；library 无 → 自动下载（复用 download 流程）→ 推；`--latest` → 强制刷新 App Store 最新版再推。
 - **设备选择**：`--udid <id>` flag；缺省单台自动选中、多台交互提示（huh）选择、0 台报错。
-- **账号选择**：`--profile <id>` flag（缺省 active profile），与 download/library 命令一致。
+- **账号选择**：`--profile <id>` flag（缺省 active profile），**仅 `device install` 接受**（涉及 library 与下载凭据）；`device list` / `device apps` / `device uninstall` 不接受 `--profile`（设备只读/卸载操作与账号无关，传入则 cobra 报 unknown flag）。与 download/library 的 `--profile` 语义对齐。
 - **iOS 17+ tunnel 检测**：服务操作缺 tunnel 时返回 `ErrTunnelRequired` + 可操作消息；list 经 usbmuxd 仍可用。
 - **uninstall 二次确认**：交互式 `[y/N]`；非交互模式（非 TTY）拒绝（safe default）。
 - `device apps` 仅列举 user-installed app（不含系统 app）。
@@ -100,7 +100,7 @@
 | US-06 | P1 | As a user, I want to select which device to operate on when multiple are connected, so that I target the right device. | 多设备场景常见（家庭多台 iPhone/iPad）；必须可控。 |
 | US-07 | P1 | As a user with an iOS 17+ device, I want a clear error telling me to start the tunnel, so that I can fix it myself rather than hitting a silent failure. | iOS 17+ 设备普及；silent failure 不可接受；安全红线决定不自动 sudo。 |
 | US-08 | P2 | As a user, I want to refresh to the App Store's latest version before pushing via `--latest`, so that I can update an already-installed app. | "update" 用例；合并进 install 的 flag，覆盖拿新版场景。 |
-| US-09 | P2 | As a user, I want to specify which profile's library/credentials to use via `--profile <id>`, so that I can install from a non-active account without switching. | 多账号一致性体验；与 download/library 命令对齐。 |
+| US-09 | P2 | As a user, I want `device install` to accept `--profile <id>`, so that I can install from a non-active account's library without switching. | 多账号一致性体验；仅 install 需要（涉及 library + 凭据），设备只读/卸载操作与账号无关。 |
 | US-10 | P3 | As a user, I want to install a specific version via `--version <v>` when my library holds multiple versions, so that I can put an older version on a legacy device. | 多版本库场景；少数派需求（旧设备不支持最新版）。 |
 
 ### Priority Rationale
@@ -129,6 +129,7 @@
 - **AC-02-6**：Given 多台设备连接且未传 `--udid`，When 运行 `device install <bundle-id>`，Then 交互提示选择设备（显示 UDID/Name 选项）；选某台 → 推送该台 exit 0；选取消 → `"cancelled"` exit 0。
 - **AC-02-7**：Given 目标设备未信任 / 未配对（go-ios 返回 trust 错误），When 运行 `device install`，Then 显示 go-ios 错误消息 + 提示在设备上信任此 Mac，exit 1。
 - **AC-02-8**：Given active profile 不存在或未设置，When 运行 `device install <bundle-id>`，Then 显示错误（指向 `auth login` 或 `accounts use`），exit 1。
+- **AC-02-9**：Given 目标设备已装该 app（相同或不同版本），When 运行 `device install <bundle-id>`，Then 仍执行推送（install 是 push 语义，不因设备已有 app 而跳过）；设备端接受/拒绝（如拒绝降级）由 go-ios + 设备决定并上浮结果，exit 0（成功）或相应错误。
 
 ### US-03 — install 自动下载（library 缺 IPA 时）
 
@@ -155,20 +156,26 @@
 - **AC-05-3**：Given 多台设备连接且未传 `--udid`，When 运行 `device apps`，Then 交互提示选择设备（同 AC-02-6 模式）。
 - **AC-05-4**：Given `--udid <id>` 指定设备，When 运行 `device apps --udid <id>`，Then 列举该设备的 user app。
 
-### US-06 — 多设备选择（行为由 AC-02-4/5/6、AC-04-5、AC-05-3/4 共同覆盖）
+### US-06 — 多设备选择
 
-> 无独立 AC；设备选择行为（`--udid` 选中 / 未连报错 / 多台交互 / 0 台报错）由 install、uninstall、apps 各组 AC 完整规定。
+> 设备选择行为适用于所有设备服务命令（install / apps / uninstall）。以下 AC 为通用规则，各命令的专属 AC（AC-02-* / AC-04-* / AC-05-*）补充命令特定行为。
+
+- **AC-06-1**：Given 0 台设备连接，When 运行 `device install` / `device apps` / `device uninstall`（任一服务命令），Then 显示 `"no connected device; connect a device and trust this Mac"` 错误，exit 1。
+- **AC-06-2**：Given `--udid <id>` 指向未连接设备，When 运行任一设备服务命令带 `--udid <id>`，Then 显示 `"device '<id>' not connected"` 错误，exit 1。
+- **AC-06-3**：Given 多台设备连接且未传 `--udid` 且处于交互模式（TTY），When 运行任一设备服务命令，Then 交互提示选择设备；选某台 → 操作该台；选取消 → `"cancelled"` exit 0。
+- **AC-06-4**：Given 多台设备连接且未传 `--udid` 且处于非交互模式（非 TTY），When 运行任一设备服务命令，Then 显示 `"multiple devices connected; specify --udid (non-interactive mode)"` 错误，exit 1（无法交互选择）。
+- **AC-06-5**：Given 恰好 1 台设备连接且未传 `--udid`，When 运行任一设备服务命令，Then 自动选中该台设备执行（无需交互），exit 0（成功）或按命令特定结果。
 
 ### US-07 — iOS 17+ tunnel 处理
 
 - **AC-07-1**：Given iOS 17+ 设备已连接且 tunnel 未运行，When 运行 `device list`，Then 该设备**仍被列出**（usbmuxd 可列举），exit 0。
-- **AC-07-2**：Given iOS 17+ 设备无 tunnel，When 运行 `device install <bundle-id>`（library 有 IPA），Then 返回 `ErrTunnelRequired`，显示 `"iOS 17+ tunnel required; run: sudo ios tunnel start"`，exit 1。
-- **AC-07-3**：Given iOS 17+ 设备无 tunnel，When 运行 `device apps` 或 `device uninstall <bundle-id>`，Then 返回 `ErrTunnelRequired` + 同样提示消息，exit 1。
-- **AC-07-4**：Given 任意场景，When 工具执行设备操作，Then **绝不**自动运行 `sudo` / `ios tunnel start`（用户必须手动启动 tunnel）；验证方法：源码审计执行路径无 `sudo` / 无 exec 提权调用。
+- **AC-07-2**：Given iOS 17+ 设备无 tunnel，When 运行 `device install <bundle-id>`（library 有 IPA），Then stderr 显示 `"iOS 17+ tunnel required; run: sudo ios tunnel start"`，**不执行推送**，exit 1。
+- **AC-07-3**：Given iOS 17+ 设备无 tunnel，When 运行 `device apps` 或 `device uninstall <bundle-id>`，Then stderr 显示同样的 tunnel 提示消息，**不执行该操作**，exit 1。
+- **AC-07-4**：Given 任意缺 tunnel 场景，When 工具执行设备服务操作，Then **绝不**请求管理员密码、绝不启动 `sudo` / `ios tunnel start` 子进程，仅打印 tunnel 提示消息并 exit 1（用户必须手动启动 tunnel）。
 
 ### US-08 — `--latest`（update 用例）
 
-- **AC-08-1**：Given library 最高版本为 v1.0 且 App Store 最新为 v2.0，When 运行 `device install <bundle-id> --latest`，Then 先下载 v2.0 到 library（覆盖/新增），再推送 v2.0 到设备，成功消息显示 v2.0，exit 0。
+- **AC-08-1**：Given library 含 v1.0 且 App Store 最新为 v2.0，When 运行 `device install <bundle-id> --latest`，Then 先下载 v2.0 到 library（作为新版本条目，**保留** v1.0，与 download mission 多版本共存一致），再推送 v2.0 到设备，成功消息显示 v2.0，exit 0。
 - **AC-08-2**：Given library 最高版本已等于 App Store 最新版本，When 运行 `device install <bundle-id> --latest`，Then 不重复下载，推送 library 现有 IPA，显示 `"already up to date (vX)"`，exit 0。
 - **AC-08-3**：Given `--latest` 触发下载但 active profile 未登录，When 运行，Then 同 AC-03-3 报 credentials 错误，exit 1。
 
@@ -177,13 +184,13 @@
 - **AC-09-1**：Given `--profile <id>` 指向有效且已登录的 profile 且其 library 含该 IPA，When 运行 `device install <bundle-id> --profile <id>`，Then 推送该 profile library 的 IPA（不触及 active profile）。
 - **AC-09-2**：Given `--profile <id>` 指向有效但**未登录**的 profile 且其 library 含该 IPA，When 运行 `device install <bundle-id> --profile <id>`，Then 推送成功（cached 推送无需凭据），exit 0。
 - **AC-09-3**：Given `--profile <id>` 指向有效但未登录的 profile 且 library **缺**该 IPA（需自动下载），When 运行 `device install <bundle-id> --profile <id>`，Then 复用 download 流程返回 `"profile '<id>' has no credentials"` 错误，exit 1。
-- **AC-09-4**：Given `--profile <id>` 指向不存在的 profile，When 运行任一 device 命令带 `--profile <id>`，Then 显示 `"profile '<id>' not found"` 错误，exit 1。
-- **AC-09-5**：Given `--profile` 用于 device apps / uninstall（只读设备、不触及 library），When 运行 `device apps --profile <id>`，Then profile 参数被接受但**不影响**设备操作（设备操作与账号无关；profile 仅在涉及 library/下载时生效）。注：为避免误导，design 阶段决定 device apps/uninstall 是否接受 `--profile`（可能只 install 接受）。
+- **AC-09-4**：Given `--profile <id>` 指向不存在的 profile，When 运行 `device install <bundle-id> --profile <id>`，Then 显示 `"profile '<id>' not found"` 错误，exit 1。
+- **AC-09-5**：Given `device list` / `device apps` / `device uninstall` 不接受 `--profile`，When 运行 `device apps --profile <id>`（或 uninstall/list 同），Then cobra 报 unknown flag 错误（`unknown flag: --profile`），exit 1（设备只读/卸载操作与账号无关）。
 
 ### US-10 — `--version` 选择
 
 - **AC-10-1**：Given library 含 bundle-id 的多个版本，When 运行 `device install <bundle-id> --version <v>`，Then 推送该指定版本，exit 0。
-- **AC-10-2**：Given library 含 bundle-id 的多个版本且未传 `--version`，When 运行 `device install <bundle-id>`，Then 推送**最高**版本，exit 0。
+- **AC-10-2**：Given library 含 bundle-id 的多个版本且未传 `--version`，When 运行 `device install <bundle-id>`，Then 推送**最近下载**的版本（按 downloaded-at 时间戳最新，避免不可靠的 version-string 语义比较），exit 0。
 - **AC-10-3**：Given `--version <v>` 指向 library 中不存在的版本，When 运行 `device install <bundle-id> --version <v>`，Then 显示 `"version '<v>' not in library for '<bundle-id>'"` 错误，exit 1。
 - **AC-10-4**：Given `--latest` 与 `--version <v>` 同时传入，When 运行，Then 显示冲突错误（二者互斥），exit 1。
 
@@ -192,7 +199,7 @@
 | ID | Category | Requirement | Measurement |
 |----|----------|-------------|-------------|
 | NFR-01 | Reliability — tunnel precondition | iOS 17+ 缺 tunnel 时绝不静默失败或挂起；在合理时间内返回 `ErrTunnelRequired`。 | iOS 17+ 无 tunnel 时 `device install` 在 5s 内 exit 1 + 可操作消息。 |
-| NFR-02 | Reliability — clean install | install 要么完整成功要么干净失败；不留下设备端歧义状态（zipconduit 设备端原子）。 | 失败后 `device apps` 状态与 install 前一致（无半装残留）。 |
+| NFR-02 | Reliability — failure boundary | preflight 失败（无设备 / tunnel 缺失 / trust / profile/凭据 / library 缺且下载失败）在任意设备写入**之前**报错，设备状态不变。传输中途失败（网络中断等）诚实上浮 go-ios 错误；工具**不声称**设备端回滚（那是 go-ios 的职责，本工具 Non-goal 不做安装后完整性校验）。 | preflight 失败后 `device apps` 与失败前一致；中途失败显示明确错误 + exit 1（不谎称成功）。 |
 | NFR-03 | Security — no privilege escalation | 工具**绝不**运行 `sudo` / 自动启动 tunnel；用户必须手动。 | 源码审计：执行路径 grep `sudo` / exec 提权调用为空。 |
 | NFR-04 | Usability — actionable errors | 所有设备错误（无设备 / tunnel / trust / 未装 / 不存在）含人类可读原因 + 下一步建议。 | 每条错误消息含 cause + suggestion（如 `run: sudo ios tunnel start` / `trust this Mac on the device`）。 |
 | NFR-05 | Compatibility | 仅支持 macOS（与 v1 一致）；依赖 go-ios 设备后端。 | `go build` 产出 macOS 二进制；非 macOS 不保证。 |
@@ -215,10 +222,11 @@
 | **installationproxy** | go-ios 列举已装 app（`BrowseUserApps`）与卸载（`Uninstall`）的服务。 |
 | **Push** | 把本地 IPA 推到设备安装的动作（`zipconduit.SendFile`）。 |
 | **Auto-download** | install 编排步骤——library 缺 bundle-id 时运行下载流程（lookup → download → ReplicateSinf）填充 library 后再 push。 |
-| **Library cache reuse** | install 复用 per-profile library；library 是 install 的快速缓存层。 |
+| **Library cache reuse** | install 复用 per-profile library；library 是 install 的快速缓存层。多版本共存时缺省推送**最近下载**的版本（按 downloaded-at）。 |
 | **Profile（继承）** | per-account 配置；install 的 library 隔离 + 下载凭据均按 profile 索引。 |
-| **`--latest`** | install flag：强制查询 App Store 最新版，library 不及则下载再推（= update 语义）。 |
+| **`--latest`** | install flag：强制查询 App Store 最新版，library 不及则下载（作为新版本条目，保留旧版）再推（= update 语义）。 |
 | **user app vs system app** | `device apps` 仅列 user-installed app（`BrowseUserApps`），不含系统 app。 |
+| **go-ios 类型（impl constraint）** | `ios.DeviceEntry` / `zipconduit` / `installationproxy` 等 go-ios 具体类型是实现约束（design 阶段在 `internal/device/` adapter 内封装），非领域概念本身；AC 不耦合这些类型。 |
 
 ## 8. Success Criteria
 
@@ -239,5 +247,5 @@
 - **多设备**：单命令操作单台设备；`--all` 批量留给未来。
 - **iOS 17+ tunnel**：绝不自动 sudo（安全红线）；tunnel 缺失返回 `ErrTunnelRequired` + `sudo ios tunnel start` 提示；`device list` 经 usbmuxd 仍可列举 iOS 17+ 设备。
 - **设备配对/信任**：假设已配对（A-02）；trust 错误由 go-ios 上浮 + 提示。
-- **`--profile` 适用范围**：install 必须接受（涉及 library + 下载凭据）；device apps / uninstall 是否接受 `--profile` 留给 design 决定（设备操作本身与账号无关，AC-09-5 已标注）。
+- **`--profile` 适用范围（已定）**：**仅 `device install` 接受 `--profile`**（涉及 library + 下载凭据）；`device list` / `device apps` / `device uninstall` 不接受（设备只读/卸载操作与账号无关，传入则 cobra 报 unknown flag）。这是 CLI 契约决策，不再推迟到 design。
 - **`device apps` 过滤**：不支持按 bundle-id 过滤参数（用户可 grep 输出）；保持命令极简。
