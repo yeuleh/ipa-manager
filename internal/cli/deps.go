@@ -8,6 +8,7 @@ import (
 	"github.com/yeuleh/ipa-manager/internal/account"
 	"github.com/yeuleh/ipa-manager/internal/appstore"
 	"github.com/yeuleh/ipa-manager/internal/config"
+	"github.com/yeuleh/ipa-manager/internal/device"
 	"github.com/yeuleh/ipa-manager/internal/library"
 	"github.com/yeuleh/ipa-manager/internal/ui"
 )
@@ -21,6 +22,7 @@ type Deps struct {
 	UI              ui.Prompter              // interactive prompts
 	ConfigRoot      string                   // ~/.ipa-manager root path
 	LibraryStore    library.Store            // per-profile IPA library (T2)
+	DeviceService   device.Service           // device operations (T1: list)
 }
 
 // newProductionDeps constructs real (non-mock) dependencies for production use.
@@ -49,5 +51,6 @@ func newProductionDeps() (Deps, error) {
 		UI:              ui.NewPrompter(),
 		ConfigRoot:      paths.Root,
 		LibraryStore:    library.NewStore(paths.Library),
+		DeviceService:   device.NewService(device.NewDefaultBackend()),
 	}, nil
 }

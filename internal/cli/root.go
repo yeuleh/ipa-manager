@@ -37,8 +37,7 @@ func newRootCmd(deps Deps) *cobra.Command {
 		accountCmd(deps),
 		appCmd(deps),
 		libraryCmd(deps),
-		devicesCmd(),
-		installCmd(),
+		deviceCmd(deps),
 		doctorCmd(),
 	)
 	return root
