@@ -90,64 +90,115 @@ type Service interface {
 type Backend interface {
     ListDeviceEntries() ([]ios.DeviceEntry, error)
     GetDeviceEntry(udid string) (ios.DeviceEntry, error)
-    GetProductVersion(entry ios.DeviceEntry) (string, error) // lockdown; 用于 tunnel 诊断 + DeviceInfo
-    SendFile(entry ios.DeviceEntry, ipaPath string) error    // zipconduit.New + SendFile
-    BrowseUserApps(entry ios.DeviceEntry) ([]installationproxy.AppInfo, error)
-    UninstallApp(entry ios.DeviceEntry, bundleID string) error
+    // lockdown：一次返回 DeviceName + ProductVersion（DeviceInfo 填充 + tunnel 诊断共用）
+    GetLockdownInfo(entry ios.DeviceEntry) (name, version string, err error)
+    // 只读查询运行中的 tunnel agent（HTTP GET 127.0.0.1:60105，无 sudo）；
+    // 返回 address+rsdPort 用于注入 RSD；ErrTunnelNotFound 表示无 tunnel（iOS 17+ → 提示用户启动）
+    LookupTunnelInfo(udid string) (address string, rsdPort int, err error)
+
+    // 连接阶段（与操作阶段分离——使 connect 失败可定向为 tunnel，operate 失败原样上浮）
+    OpenInstaller(entry ios.DeviceEntry) (InstallerConn, error)     // zipconduit.New
+    OpenInstallationProxy(entry ios.DeviceEntry) (ProxyConn, error) // installationproxy.New
+}
+
+// 包内连接接口（封装 go-ios *Connection，不泄露给 CLI）
+type InstallerConn interface {
+    SendFile(ipaPath string) error
+    Close() error
+}
+type ProxyConn interface {
+    BrowseUserApps() ([]installationproxy.AppInfo, error)
+    Uninstall(bundleID string) error
+    Close()
 }
 ```
 
-> **不暴露 `SupportsRsd`**：`ios.ListDevices()` 经 usbmuxd 返回的 DeviceEntry 其 `Rsd` 恒为 nil（RSD 端口只由 tunnel 提供），故 `SupportsRsd()` 对 usbmuxd 枚举的设备恒为 false——不能用于检测 iOS 17+。iOS 版本经 lockdown `GetValues().ProductVersion` 获取（usbmuxd lockdown 在 iOS 17+ 已配对设备上仍可用）。
+> **不暴露 `SupportsRsd`**：`ios.ListDevices()` 经 usbmuxd 返回的 DeviceEntry 其 `Rsd` 恒为 nil（RSD 端口只由 tunnel 提供），故 `SupportsRsd()` 对 usbmuxd 枚举的设备恒为 false——不能用于检测 iOS 17+。iOS 版本经 lockdown `GetLockdownInfo`（usbmuxd lockdown 在 iOS 17+ 已配对设备上仍可用）。
+>
+> **连接/操作分离**（Spock #1/#3/#8）：`OpenInstaller`/`OpenInstallationProxy` 只做服务连接（go-ios `New()`）；`SendFile`/`Browse`/`Uninstall` 是连接成功后的操作。这样 Service 能区分：**连接失败**（iOS≥17 已配对 → tunnel 缺失）与**操作失败**（未装/无效包/传输中断 → 原样上浮，绝不误判 tunnel）。也让 E2E oracle 可证（连接失败时 conn 为 nil，操作方法不可能被调用）。
 
 生产实现 `defaultBackend{}` 直接调用 go-ios；`device.NewService(backend Backend)` 允许测试注入 mock Backend。**CLI 测试**则通过 `cli.Deps.DeviceService` 注入 mock `device.Service`（更外层，不触及 go-ios 类型）。
 
 > 理由：双层 mock 点——CLI 测试 mock `device.Service`（行为级），device 包自身测试 mock `Backend`（go-ios 调用级）。与 appstore 包结构对称（appstore 有 ProfileAppStore 接口给 CLI、内部 adapter 调 ipatool）。
 
-#### DD-02 — iOS 17+ tunnel 检测（版本感知 + 失败驱动）
+#### DD-02 — iOS 17+ tunnel：分层检测（连接阶段定向）+ tunnel info 复用
 
-**go-ios v1.2.0 实际行为（源码实证，纠正初稿假设）：**
+**go-ios v1.2.0 实际行为（源码实证）：**
 
 | 操作 | go-ios 路径 | iOS 17+ 无 tunnel |
 |------|------------|-------------------|
-| `zipconduit.New`（install） | `if !SupportsRsd() → NewWithUsbmuxdConnection`；`SupportsRsd() → NewWithShimConnection→ConnectToShimService`（缺 Rsd 时报 "missing tunnel"） | usbmuxd 枚举的设备 `Rsd=nil` → `SupportsRsd()=false` → 走 **usbmuxd** 路径 → iOS 17+ 上 Apple 已移除该服务的 usbmuxd 通道 → **失败**（lockdown/StartService 错误，**非** "missing tunnel" 字符串） |
-| `installationproxy.New`（apps/uninstall） | 直接 `ios.ConnectToService`（usbmuxd lockdown），**不**走 ConnectToShimService | usbmuxd lockdown 在 iOS 17+ 已配对设备上**仍可用** → **可能成功**（无需 tunnel） |
+| `zipconduit.New`（install） | `if !SupportsRsd() → NewWithUsbmuxdConnection`（usbmuxd）；`SupportsRsd() → NewWithShimConnection→ConnectToShimService` | usbmuxd 枚举设备 `Rsd=nil`→走 usbmuxd→iOS 17+ Apple 已移除该通道→**连接失败** |
+| `installationproxy.New`（apps/uninstall） | 直接 `ios.ConnectToService`（usbmuxd lockdown），**不**走 shim | usbmuxd lockdown 在 iOS 17+ 已配对设备上**仍可用**→**可能成功**（无需 tunnel） |
+| `tunnel.TunnelInfoForDevice(udid,host,port)` | 只读 HTTP GET 运行中的 tunnel agent（默认 127.0.0.1:60105），返回 address+rsdPort；**无 sudo** | agent 未运行→`ErrTunnelNotFound`；运行中→可注入 RSD 使 zipconduit 走 shim |
 
-**两个关键纠正**：
-1. `SupportsRsd()` 经 `ListDevices()` 恒 false（Rsd 恒 nil）→ **不能**用它检测 iOS 17+，也**不能**用 "RSD 设备任意错误 ⇒ tunnel"（会吞掉真实错误，违反 NFR-02）。
-2. apps/uninstall 走 usbmuxd lockdown，在 iOS 17+ 上**可能不需要 tunnel**；AC-07-3 对 apps/uninstall 的适用性取决于 live 行为（installationproxy 是否真在 iOS 17+ 无 tunnel 下失败），留 validate 阶段真机确认。
+**纠正初稿两处错误**：① `installationproxy.New` 走 `ConnectToService`（usbmuxd），非 `ConnectToShimService`；② 存在只读 tunnel 查询入口（`TunnelInfoForDevice`），初稿误称"无只读 API"。
 
-**检测策略（版本感知 + 失败驱动）**——只在操作**实际失败**时才诊断，且用 iOS 版本定向：
+**两个关键原则**：
+1. `SupportsRsd()` 经 `ListDevices()` 恒 false（Rsd 恒 nil）→ 不能用于检测 iOS 17+；也不能"任意错误⇒tunnel"（会吞真实错误，违反 NFR-02）。
+2. iOS 版本经 lockdown `GetLockdownInfo` 判定；GetLockdownInfo 成功本身证明设备**已配对信任**（lockdown 需 trust），从而排除 connect 失败中的 trust 因素。
+
+**分层检测（connect 失败→tunnel；operate 失败→原样）**：
 
 ```go
 // internal/device/tunnel.go
-// diagnoseServiceError 在设备服务操作失败时，若设备是 iOS 17+，判定为 tunnel 缺失。
-// iosVersion 为空（GetValues 失败，如未配对）则无法定向 → 原样上浮（不臆测）。
-func diagnoseServiceError(err error, iosVersion string) error {
+// isIOS17OrLater: "17"/"17.5"/"18.0"→true；空串或解析失败→false（诚实降级，不臆测）。
+//   规则：strings.TrimSpace → 按 "." 切首段 → strconv.Atoi → major>=17；失败返回 false。
+func isIOS17OrLater(version string) bool
+
+// diagnoseConnectError 仅对【连接阶段】失败定向：已配对(版本已知) + iOS≥17 → ErrTunnelRequired。
+//   版本未知（GetLockdownInfo 失败，如未配对）→ 无法排除 trust → 原样上浮（诚实）。
+//   iOS<17 → 原样上浮（usbmuxd/trust 问题）。
+func diagnoseConnectError(err error, version string) error {
     if err == nil { return nil }
-    if isIOS17OrLater(iosVersion) {        // "17", "17.5", "18.0" → true；解析 ProductVersion 主版本
-        return ErrTunnelRequired
+    if isIOS17OrLater(version) { return ErrTunnelRequired }
+    return err
+}
+// 操作阶段错误（SendFile/Browse/Uninstall）【绝不】经此翻译——原样上浮（ErrAppNotInstalled/无效包/传输中断）。
+```
+
+**Service.Install 编排（含 tunnel info 复用，使 iOS 17+ install 在用户启 tunnel 后可用）**：
+
+```go
+func (s *backendService) Install(udid, ipaPath string) error {
+    entry, name, version := s.resolveEntry(udid) // GetDeviceEntry + best-effort GetLockdownInfo
+    // iOS 17+：尝试复用运行中的 tunnel（只读查询，无 sudo），使 zipconduit 走 shim
+    if isIOS17OrLater(version) {
+        if addr, port, e := s.backend.LookupTunnelInfo(udid); e == nil {
+            entry = withRsdProvider(entry, udid, addr, port) // 注入 RSD → OpenInstaller 走 shim
+        } // e!=nil（无 tunnel）→ OpenInstaller 仍走 usbmuxd → 连接失败 → ErrTunnelRequired
     }
-    return err                              // iOS<17 或版本未知 → 原样上浮（trust/not-installed/网络等）
+    conn, err := s.backend.OpenInstaller(entry) // 连接阶段
+    if err != nil {
+        return diagnoseConnectError(err, version) // iOS≥17 已配对 → ErrTunnelRequired；否则原样
+    }
+    defer conn.Close()
+    return conn.SendFile(ipaPath) // 操作阶段 → 原样上浮（绝不误判 tunnel）
 }
 ```
 
-`device.Service` 的每个服务操作（Install/ListInstalledApps/Uninstall）实现：
-1. `Backend.GetDeviceEntry(udid)` → entry（usbmuxd，Rsd=nil）。
-2. best-effort `Backend.GetProductVersion(entry)` → version（用于诊断；失败不致命）。
-3. 执行操作（SendFile/BrowseUserApps/UninstallApp）。
-4. 操作出错 → `diagnoseServiceError(err, version)`：iOS 17+ → `ErrTunnelRequired`；否则原样。
+**为何稳健（满足 Spock #1/#3/#8）**：
+- **不误报**：operate 阶段错误（未装/无效包）不经 `diagnoseConnectError`，原样上浮——iOS 17+ 设备上 uninstall 未安装返回 `ErrAppNotInstalled` 而非 tunnel。
+- **不漏报**：install iOS 17+ 无 tunnel → OpenInstaller 连接失败 → `diagnoseConnectError`→ErrTunnelRequired。
+- **不吞真实错误**：iOS<17 connect 失败原样；operate 阶段任意失败原样。
+- **trust 已排除**：GetLockdownInfo 成功（版本已知）即证明已配对；故 iOS≥17 connect 失败定向为 tunnel 是精确的。
+- **诚实降级**：GetLockdownInfo 失败（版本未知/未配对）→ connect 失败原样上浮（用户看到 go-ios 的 trust/pair 提示）。
+- **tunnel 闭环**：用户启 tunnel 后，LookupTunnelInfo 成功→注入 RSD→install 经 shim 成功。AC-07 的"fix it yourself"真正闭环。
+- **oracle 可证**：连接失败时 `conn==nil`，`SendFile` 不可能被调用（E2E-091/093b 在 device 包单测 mock Backend.OpenInstaller 返回 error → 断言返回的 InstallerConn 未调 SendFile）。
 
-**为何稳健**：
-- **不过报**：apps/uninstall 若在 iOS 17+ 无 tunnel 下成功（走 usbmuxd）→ 无错误 → 不触发 ErrTunnelRequired → 用户正常用。AC-07-3 仅在"确实失败"时生效。
-- **不漏报**：install 在 iOS 17+ 无 tunnel 下必失败（Apple 已移除 usbmuxd zipconduit 通道）→ 触发 ErrTunnelRequired → AC-07-2 成立。
-- **不吞真实错误**：iOS<17 的失败（trust/not-installed/网络）原样上浮，不被误判为 tunnel。
-- **版本未知降级**：GetValues 失败（未配对/untrusted）→ 无法定向 → 原样上浮（诚实，不臆测 tunnel）。
+**Service.ListInstalledApps / Uninstall**（installationproxy 走 usbmuxd，iOS 17+ 大概率成功）：
+```go
+conn, err := s.backend.OpenInstallationProxy(entry) // 连接阶段（usbmuxd lockdown）
+if err != nil { return diagnoseConnectError(err, version) } // 极少触发；iOS≥17 且真失败→tunnel
+defer conn.Close()
+// operate: BrowseUserApps() / Uninstall(bid) → 原样（ErrAppNotInstalled 等）
+```
+> apps/uninstall 在 iOS 17+ 无 tunnel 下**大概率成功**（usbmuxd lockdown）；AC-07-3 对其的适用性取决于 live 行为，validate 阶段真机定论（E2E-093c）。若证伪→regress requirements 收窄 AC-07-3 至 install-only。
 
-CLI 层 `errors.Is(err, device.ErrTunnelRequired)` → 打印 `"iOS 17+ tunnel required; run: sudo ios tunnel start"`（AC-07-2；AC-07-3 在 apps/uninstall 真失败时同样触发）。
+CLI 层 `errors.Is(err, device.ErrTunnelRequired)` → 打印 `"iOS 17+ tunnel required; run: sudo ios tunnel start"`。
 
-> `DeviceInfo.NeedsTunnel` 语义相应改为 **"iOS 版本 ≥ 17"**（非 SupportsRsd），供 `device list` 展示与提示。
+> `DeviceInfo.NeedsTunnel` = iOS 版本 ≥ 17（版本未知时 false/未知显示）。
 >
-> 替代方案（否决）：① 主动调用 `tunnel` 包探测——go-ios tunnel API 面向"启动 tunnel"（需 sudo），无只读探测入口；② 字符串匹配 "missing tunnel address"——仅 `ConnectToShimService` 产生此串，而 usbmuxd 路径失败不产生，会漏检 install。版本感知 + 失败驱动覆盖两者。
+> 替代方案（否决）：① SupportsRsd 判定（Rsd 恒 nil 不可用）；② 主动启动 tunnel（需 sudo，违反 NFR-03）；③ 字符串匹配 "missing tunnel"（usbmuxd 路径失败不产生该串会漏检）。分层 + tunnel info 复用最稳且闭环。
 
 #### DD-03 — 设备选择在 CLI 层（resolveDevice helper）
 
@@ -256,8 +307,9 @@ type Deps struct {
 | `device.DeviceInfo` | struct（新） | UDID/Name/IOSVersion/ConnectionType/NeedsTunnel；`NeedsTunnel = iOS版本≥17`（非 SupportsRsd，见 DD-02）；无 go-ios 类型 |
 | `device.InstalledApp` | struct（已存在） | BundleID/Name/Version；保留 |
 | `device.Service` | interface（新） | ListConnected/ListInstalledApps/Install/Uninstall |
-| `device.Backend` | interface（新，包内） | go-ios 调用契约（含 go-ios 类型；含 `GetProductVersion` 供诊断） |
-| `device.ErrTunnelRequired` | sentinel（已存在） | 保留；CLI errors.Is 检测（DD-02 版本感知触发） |
+| `device.Backend` | interface（新，包内） | go-ios 调用契约；连接/操作分离（OpenInstaller/OpenInstallationProxy + InstallerConn/ProxyConn）+ GetLockdownInfo + LookupTunnelInfo |
+| `device.InstallerConn` / `ProxyConn` | interface（新，包内） | 封装 go-ios *Connection（SendFile / BrowseUserApps / Uninstall + Close）；不泄露给 CLI |
+| `device.ErrTunnelRequired` | sentinel（已存在） | 保留；CLI errors.Is 检测（DD-02 分层诊断：connect 失败 + iOS≥17 已配对 触发） |
 | `ui.DeviceOption` | struct（新） | UDID/Label；SelectDevice 入参 |
 | `ui.Prompter.SelectDevice` | method（新） | 设备选择提示 |
 | `cli.Deps.DeviceService` | field（新） | device.Service 注入 |
@@ -307,10 +359,10 @@ report success: "✓ Installed <app> <ver> → <dev.Name>"                      
 
 | 文件 | 职责 |
 |------|------|
-| `internal/device/service.go` | `Service` 接口 + `DeviceInfo` + `NewService(backend Backend)` + `backendService` 实现（每操作含 DD-02 版本感知诊断） |
-| `internal/device/backend.go` | `Backend` 接口（包内；含 GetProductVersion） |
-| `internal/device/backend_impl.go` | `defaultBackend{}` 调真实 go-ios（ListDevices/GetValues→ProductVersion/zipconduit/installationproxy） |
-| `internal/device/tunnel.go` | `isIOS17OrLater(version)` / `diagnoseServiceError(err, version)` |
+| `internal/device/service.go` | `Service` 接口 + `DeviceInfo` + `NewService(backend Backend)` + `backendService` 实现（含 DD-02 分层诊断 + tunnel info 复用编排） |
+| `internal/device/backend.go` | `Backend` 接口 + `InstallerConn`/`ProxyConn`（包内；连接/操作分离） |
+| `internal/device/backend_impl.go` | `defaultBackend{}` 调真实 go-ios（ListDevices/GetLockdownInfo/LookupTunnelInfo/zipconduit/installationproxy + withRsdProvider） |
+| `internal/device/tunnel.go` | `isIOS17OrLater(version)` / `diagnoseConnectError(err, version)` |
 | `internal/device/service_test.go` | Service 行为测试（mock Backend），覆盖 tunnel 诊断/list/apps/install/uninstall + iOS17+定向 |
 | `internal/cli/device.go` | `device` 命令组 + 4 子命令构造 |
 | `internal/cli/device_install.go` | install 编排（决策树 §3.3）+ `downloadToLibrary`（install 专属，复用 handleDownloadError 系列） |
@@ -343,9 +395,9 @@ report success: "✓ Installed <app> <ver> → <dev.Name>"                      
 [device list]
   → DeviceService.ListConnected()
      → Backend.ListDeviceEntries() (ios.ListDevices, usbmuxd)
-     → for each entry: best-effort Backend.GetProductVersion(entry) (lockdown)
-         成功 → 填 Name/IOSVersion；NeedsTunnel = (iOS版本≥17)
-         失败 → Name/IOSVersion="" (untrusted)；NeedsTunnel=未知(按 false 显示)
+     → for each entry: best-effort Backend.GetLockdownInfo(entry) (一次返回 name+version)
+         成功 → 填 Name/IOSVersion；NeedsTunnel = isIOS17OrLater(version)
+         失败 → Name/IOSVersion="" (untrusted)；NeedsTunnel=false(版本未知)
    → 0 台: "no connected device" exit 0 (AC-01-2)
    → ≥1 台: 表格输出 (UDID/Name/iOS Version/Connection Type) exit 0 (AC-01-1/3)
 ```
@@ -358,20 +410,20 @@ report success: "✓ Installed <app> <ver> → <dev.Name>"                      
 [device apps [--udid id]]
   → dev = resolveDevice(deps, --udid)          (AC-06-*；返回 DeviceInfo)
   → DeviceService.ListInstalledApps(dev.UDID)
-     → Backend.GetDeviceEntry(udid) → entry
-     → version = best-effort Backend.GetProductVersion(entry)
-     → svc, err = installationproxy.New(entry) (usbmuxd lockdown)
-     → err != nil → diagnoseServiceError(err, version):
-          iOS≥17 → ErrTunnelRequired (AC-07-3，仅当真失败)
-          否则 → 原样上浮
-     → svc.BrowseUserApps() → []AppInfo → map → []InstalledApp
+     → entry, name, version = resolveEntry(udid) (GetDeviceEntry + best-effort GetLockdownInfo)
+     → conn, err = Backend.OpenInstallationProxy(entry)  【连接阶段，usbmuxd lockdown】
+     → err != nil → diagnoseConnectError(err, version):
+          iOS≥17(已配对) → ErrTunnelRequired (AC-07-3，极少触发；validate 确认)
+          否则 → 原样上浮（trust/usbmuxd）
+     → defer conn.Close()
+     → conn.BrowseUserApps() → []AppInfo → map → []InstalledApp  【操作阶段，原样错误】
    → 0 app: "no user apps installed on device '<dev.Name>'" exit 0 (AC-05-2)
    → ≥1: 表格 (Bundle-ID/Name/Version) exit 0 (AC-05-1)
 ```
 
-> 注：installationproxy 走 usbmuxd lockdown，iOS 17+ 上**可能成功**（无需 tunnel）；此时无错误→不触发 ErrTunnelRequired（AC-07-3 仅在真失败时生效，validate 阶段真机确认）。
+> 注：installationproxy 走 usbmuxd lockdown，iOS 17+ 上**大概率成功**（无需 tunnel）；此时无 connect 错误→不触发 ErrTunnelRequired（AC-07-3 仅在真 connect 失败时生效，validate 阶段真机确认）。
 
-### 5.3 device install（核心，happy：library 有 / happy：自动下载 / failure）
+### 5.3 device install（核心，含 tunnel info 复用）
 
 ```
 [device install <bid> [--profile id] [--udid id] [--latest] [--version v]]
@@ -382,10 +434,16 @@ report success: "✓ Installed <app> <ver> → <dev.Name>"                      
        --version v: LibraryStore.GetVersion              AC-10-1/3
        default+有:  mostRecentByDownloadedAt             AC-10-2
        default+无:  downloadToLibrary(latest=false)      AC-03-1    [需 creds]
-  ④ DeviceService.Install(dev.UDID, entry.FilePath):
-       → version = best-effort GetProductVersion(entry)
-       → zipconduit New+SendFile (usbmuxd 路径，iOS17+ 必失败)
-       → err → diagnoseServiceError(err, version): iOS≥17 → ErrTunnelRequired (AC-07-2)
+  ④ DeviceService.Install(dev.UDID, entry.FilePath)  (DD-02 编排):
+       → entry, name, version = resolveEntry(udid)
+       → if isIOS17OrLater(version):
+            addr,port,e := Backend.LookupTunnelInfo(udid)  【只读 HTTP，无 sudo】
+            e==nil → entry = withRsdProvider(entry, addr, port)  【注入 RSD→走 shim】
+            e!=nil  → 无 tunnel，OpenInstaller 仍走 usbmuxd→连接失败→ErrTunnelRequired
+       → conn, err = Backend.OpenInstaller(entry)  【连接阶段】
+       → err != nil → diagnoseConnectError(err, version): iOS≥17→ErrTunnelRequired (AC-07-2)
+       → defer conn.Close()
+       → conn.SendFile(ipaPath)  【操作阶段，原样上浮；设备端拒绝降级等】AC-02-9
   ⑤ 成功: "✓ Installed <app> <ver> → <dev.Name>" exit 0
 ```
 
@@ -393,8 +451,9 @@ report success: "✓ Installed <app> <ver> → <dev.Name>"                      
 - profile 无 creds 且需下载 → AC-03-3/AC-09-3 "no credentials" exit 1
 - bundle-id 不在 App Store（自动下载路径）→ AC-03-4 "app not found" exit 1
 - license required（自动下载）→ AC-03-5 交互授权 / AC-03-6 非TTY报错 / ErrCancelled→cancelled exit 0
-- iOS 17+ 缺 tunnel（install 必失败）→ AC-07-2 tunnel hint exit 1
-- 设备未信任 → AC-02-7 go-ios trust 错误 + heuristic 提示 exit 1
+- iOS 17+ 无 tunnel（OpenInstaller 连接失败）→ AC-07-2 tunnel hint exit 1；**用户启 tunnel 后重试→LookupTunnelInfo 成功→install 成功**（闭环）
+- iOS 17+ 有 tunnel 但 SendFile 操作失败 → 原样上浮（不误判 tunnel）
+- 设备未信任（GetLockdownInfo 失败/版本未知）→ connect 失败原样上浮 + heuristic trust 提示 AC-02-7 exit 1
 - `--latest`+`--version` 同传 → AC-10-4 互斥错误 exit 1
 
 ### 5.4 device uninstall（happy + 确认 + failure）
@@ -406,10 +465,13 @@ report success: "✓ Installed <app> <ver> → <dev.Name>"                      
   ③ UI.Confirm "uninstall '<bid>' from device '<dev.Name>'?" 
        no → "cancelled" exit 0                           AC-04-1
   ④ DeviceService.Uninstall(dev.UDID, bid):
-       → version = best-effort GetProductVersion(entry)
-       → installationproxy.New (usbmuxd) + svc.Uninstall(bid)
-       → err → diagnoseServiceError(err, version): iOS≥17 且真失败 → ErrTunnelRequired (AC-07-3)
-       → 未装错误 → ErrAppNotInstalled (AC-04-3)
+       → entry, name, version = resolveEntry(udid)
+       → conn, err = Backend.OpenInstallationProxy(entry)  【连接阶段，usbmuxd】
+       → err != nil → diagnoseConnectError(err, version)  【iOS≥17 且真失败→tunnel；否则原样】
+       → defer conn.Close()
+       → err = conn.Uninstall(bid)  【操作阶段】
+            未装错误 → ErrAppNotInstalled (AC-04-3)
+            其他 → 原样上浮
   ⑤ 成功: "✓ Uninstalled <bid> from <dev.Name>" exit 0
 ```
 
@@ -434,7 +496,7 @@ report success: "✓ Installed <app> <ver> → <dev.Name>"                      
 
 - **CLI 命令树变更**：移除顶层 `devices` + `install` 组（stub，无用户依赖）→ 统一 `device` 组。无破坏性（被删命令从未可用）。**风险低**。
 - **go-ios API 稳定性**：依赖 go-ios v1.2.0 的 `ListDevices`/`GetValues`/`zipconduit.New`/`installationproxy.New`。go-ios 是活跃项目，API 可能演进 → Backend 接口隔离使变更限于 `backend_impl.go`（与 appstore 对 ipatool 的隔离策略一致）。**风险中**，已隔离。
-- **installationproxy/tunnel 行为不确定性**：`installationproxy.New` 走 usbmuxd lockdown（非 shim），在 iOS 17+ 无 tunnel 下**可能成功**（AC-07-3 对 apps/uninstall 的适用性待 validate 真机确认）。DD-02 的版本感知+失败驱动设计对两种结果都稳健（成功不报 tunnel，失败才报）。若 validate 证伪 AC-07-3 对 apps/uninstall 的前提，则 regress requirements 收窄 AC-07-3 至 install-only（届时重新 Spock+验收）。
+- **installationproxy/tunnel 行为不确定性**：`installationproxy.New` 走 usbmuxd lockdown（非 shim），在 iOS 17+ 无 tunnel 下**可能成功**（AC-07-3 对 apps/uninstall 的适用性待 validate 真机确认）。DD-02 的分层诊断对两种结果都稳健（成功不报 tunnel，connect 真失败才报）。若 validate 证伪 AC-07-3 对 apps/uninstall 的前提，则 regress requirements 收窄 AC-07-3 至 install-only（届时重新 Spock+验收）。
 
 ### 6.2 迁移需求
 
@@ -442,14 +504,14 @@ report success: "✓ Installed <app> <ver> → <dev.Name>"                      
 
 ### 6.3 安全/隐私
 
-- **绝不自动 sudo / 不启动 tunnel**（NFR-03，DD-02）：tunnel 检测是版本感知 + 失败驱动的错误诊断，零提权调用。源码审计执行路径无 `exec.Command("sudo"...)` / 无 `tunnel` 包 import 于执行路径。
+- **绝不自动 sudo / 不启动 tunnel**（NFR-03，DD-02）：绝不 `exec.Command("sudo"...)`、绝不调用 go-ios tunnel START 函数（`tunnel.NewTunnelManager*`/`startTunnel`/`ServeTunnelInfo`）。**允许**只读 `tunnel.TunnelInfoForDevice`（HTTP GET 运行中的 tunnel agent，无 sudo）以复用用户已启动的 tunnel。源码审计：执行路径无 sudo/exec 提权、无 tunnel START 调用。
 - **凭据不泄露**：install 自动下载复用 download mission 的凭据处理（AccountInfo 不暴露 Password/Token，NFR-04 继承）。device 操作本身不触及凭据。
 
 ### 6.4 性能/可靠性
 
 - **device list 性能**（NFR-08）：usbmuxd 枚举 < 100ms；lockdown enrichment per-device（best-effort，串行）。多设备时延迟 = N × lockdown RTT。**风险低**（个人工具通常 1-2 台）。若需优化，future 可并发 lockdown。
 - **tunnel 检测时延**（NFR-01）：服务操作缺 tunnel 时 go-ios 快速返回错误（不挂起），< 5s exit 1。
-- **install 失败边界**（NFR-02）：preflight（resolve profile/device/library）在设备写入前；服务操作失败经 DD-02 版本感知诊断（iOS 17+→tunnel，否则原样）；中途传输失败诚实上浮，不声称设备端回滚。
+- **install 失败边界**（NFR-02）：preflight（resolve profile/device/library）在设备写入前；连接失败经 DD-02 分层诊断（iOS 17+ 已配对→tunnel，否则原样）；操作阶段错误原样上浮，不声称设备端回滚。
 
 ### 6.5 可观测性
 
@@ -465,7 +527,7 @@ report success: "✓ Installed <app> <ver> → <dev.Name>"                      
 
 详见 [`e2e_test.md`](./e2e_test.md)。要点：
 
-- **测试分层**：CLI E2E（mock `device.Service` + 既有 mockStore/AppStore/Library）覆盖全部 AC 的可观测行为；device 包单测（mock Backend）覆盖 go-ios 调用 + DD-02 版本感知诊断。
+- **测试分层**：CLI E2E（mock `device.Service` + 既有 mockStore/AppStore/Library）覆盖全部 AC 的可观测行为；device 包单测（mock Backend）覆盖 go-ios 调用 + DD-02 分层诊断 + tunnel info 复用。
 - **spec → cases 单向流**：E2E case 从 requirements AC 派生，不反向从实现推导。
 - **live 设备验收**：validate 阶段手动（真实 iOS 设备 install/apps/uninstall + iOS 17+ tunnel 场景），不在自动化测试范围（无 CI 设备）。
 - **NFR-03 审计**：grep 执行路径无 sudo/exec 提权。
@@ -477,7 +539,7 @@ report success: "✓ Installed <app> <ver> → <dev.Name>"                      
 | 决策 | 选择 | 否决的替代 | 理由 |
 |------|------|-----------|------|
 | device 包可测试性 | Service 接口 + Backend 注入（DD-01） | 包级全局变量 | 与项目 DI 模式一致；无全局状态；双层 mock |
-| tunnel 检测 | 版本感知 + 失败驱动诊断（DD-02） | ① SupportsRsd 判定 ② 主动探测 tunnel 进程 ③ 字符串匹配 "missing tunnel" | ① ListDevices 后 Rsd 恒 nil 不可用；② 需 sudo/平台相关；③ usbmuxd 路径失败不产生该串会漏检。版本+失败驱动：不误报（成功的 apps/uninstall 不触发）、不漏报（install iOS17+ 必失败）、不吞真实错误（iOS<17 原样上浮） |
+| tunnel 检测 | 分层（connect 失败→tunnel，operate→原样）+ tunnel info 复用（DD-02） | ① SupportsRsd 判定 ② 主动启动 tunnel ③ 字符串匹配 ④ blanket iOS17 任意错误⇒tunnel | ① Rsd 恒 nil；② 需 sudo 违 NFR-03；③ usbmuxd 路径不产生该串；④ 吞真实操作错误。分层精确：operate 错误原样（不误报）、connect 失败定向（不漏报）、iOS<17 原样（不吞）。tunnel info 只读复用使 iOS17+ install 在用户启 tunnel 后闭环 |
 | 设备选择位置 | CLI 层 resolveDevice 返回 DeviceInfo（DD-03） | 下沉 device 包 / 仅返回 UDID | 交互/非TTY 是 CLI 关注点；消息需设备名故返回完整 DeviceInfo |
 | download 复用 | install 专属 downloadToLibrary + 复用已分解的 error-recovery 函数（DD-04） | 重构 app download 委托共享函数 | 重构 app download 携带 --output/--force flags 增耦合+回归面（NFR-07）；error-recovery 已是独立函数，复用它们即达 DRY（license/token 不漂移） |
 | `--profile` 范围 | 仅 install（DD-05） | 全 device 命令 | 设备只读/卸载与账号无关；避免误导 |
