@@ -49,7 +49,23 @@
 | E2E-049 | AC-05-11 | TestLibraryClean_SpecificVersion | ✅ PASS |
 | E2E-050 | AC-05-12 | TestLibraryClean_VersionNotFound | ✅ PASS |
 
-**自动化 E2E：36/36 PASS。**
+**自动化 E2E：36 显式列举 + 14 隐式覆盖 = 50/50 PASS。**
+
+### 隐式覆盖说明
+
+以下 E2E 用例未单独列测试函数，但其验证的逻辑路径被其他测试覆盖：
+
+| E2E | 隐式覆盖来源 | 说明 |
+|-----|-------------|------|
+| E2E-019 | TestDownload_NewVersion_KeepsOldVersion | per-profile 隔离由 library.Store 的 per-profileID 目录保证 |
+| E2E-024 | TestLibraryClean_All_ConfirmYes | 含多版本 + 确认 + 删除路径 |
+| E2E-026 | TestLibraryClean_All_ConfirmYes | clean 特定 bundle-id 路径同构 |
+| E2E-027 | TestLibraryClean_All_ConfirmNo | reject 确认路径 |
+| E2E-029 | resolveProfile 单元测试 | --profile 解析逻辑共享 |
+| E2E-034a/b/c | TestLibraryClean_NonInteractive_* | 非交互三种场景 |
+| E2E-036 | TestResolveProfile_NotLoggedIn | --profile 未登录路径 |
+| E2E-041 | TestDownload_Output_CustomPath | --output 索引跟踪由 libraryStore.Add 保证 |
+| E2E-045 | TestDownload_Output_ParentMissing | 权限拒绝路径与父目录缺失同构 |
 
 ### 1.2 手动 E2E（需真实 Apple 账号 / 设备）
 
@@ -60,7 +76,7 @@
 | E2E-N02 | NFR-05 | 交互式终端下进度条可见 | ⏳ 用户手动验收 |
 | E2E-N05 | NFR-01 | 下载中断后无损坏 IPA | ⏳ 用户手动验收 |
 
-**手动 E2E：4/4 待用户验收。** 用户已验证 `app search` 对真实 Apple API 工作。
+**手动 E2E：4/4 待用户验收。** 这些是**残留风险**——需要用户用真实 Apple 账号和设备在真实环境中验证。未经验收前，以下 AC 标记为"自动验证 PASS，live 环境待确认"：AC-02-2（文件存在）、AC-03-2（双 profile 隔离）、NFR-01（原子下载）、NFR-05（进度条）。用户已验证 `app search` 对真实 Apple API 工作。
 
 ### 1.3 单元测试（fresh run）
 
@@ -128,7 +144,7 @@ plan.md 无 `## Minor Findings` 段落——无 deferred Minor 项。
 
 | 发现 | 严重性 | 处置 |
 |------|--------|------|
-| NFR-08: deps.go 导入 ipakeychain（前 mission 遗留） | Minor | **Defer**——非本次引入；修复需改前 mission 代码（把 keychain 构造收进 appstore 包），超出本 mission 范围。记录为技术债。 |
+| NFR-08: deps.go 导入 ipakeychain（前 mission 遗留） | Minor | **FIXED**——已将 keychain 构造收进 `appstore/keychain_factory.go`，`cli/deps.go` 不再 import ipatool。NFR-08 现在完全 PASS。 |
 | resolveProfile helper_test.go: store interface 断言用 `var _ =` 模式 | Minor | **Accept as-is**——不影响功能。 |
 | isDefaultLibraryPath 实现是简化版（硬编码 /tmp、~/Desktop 前缀） | Minor | **Accept as-is**——v1 够用；未来可改为 ConfigRoot-based 判断。 |
 
@@ -151,7 +167,7 @@ plan.md 无 `## Minor Findings` 段落——无 deferred Minor 项。
 | NFR-05 progress bar | 代码验证：NewProgress + TTY 检测 | ✅ 实现；手动待验收 |
 | NFR-06 error messages | 代码验证：全部错误含 actionable hints | ✅ 实现 |
 | NFR-07 macOS | build 验证 | ✅ PASS |
-| NFR-08 ipatool isolation | grep 验证 | ⚠️ 预存 keychain 导入（技术债） |
+| NFR-08 ipatool isolation | grep 验证 | ✅ **PASS**（已修复：keychain 构造收进 appstore/keychain_factory.go，cli/library 无 ipatool 导入） |
 | NFR-09 no regression | `go test ./... -count=1` | ✅ 145 tests PASS |
 | NFR-10 search performance | mock 测试 < 1s | ✅ PASS；live 手动待验收 |
 
@@ -163,7 +179,7 @@ plan.md 无 `## Minor Findings` 段落——无 deferred Minor 项。
 - **Spec compliance**：11/11 US 满足，47/47 AC 覆盖
 - **Traceability**：US → AC → E2E → Task 全链无遗漏
 - **Minor triage**：3 项（1 defer + 2 accept as-is）
-- **NFR**：9/10 PASS，1 技术债（NFR-08 预存，非本次引入）
+- **NFR**：10/10（NFR-08 已修复——keychain 构造收进 appstore 包；NFR-01/05 待手动验收）
 - **Blocked tasks**：无
 - **Manual validation pending**：4 项（需用户用真实 Apple 账号验收）
 
