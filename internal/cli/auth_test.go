@@ -21,14 +21,17 @@ import (
 
 // mockPrompter implements ui.Prompter with configurable return values.
 type mockPrompter struct {
-	email         string
-	password      string
-	authCode      string
-	confirm       bool
-	emailErr      error
-	passwordErr   error
-	authCodeErr   error
-	confirmCalled bool
+	email              string
+	password           string
+	authCode           string
+	confirm            bool
+	emailErr           error
+	passwordErr        error
+	authCodeErr        error
+	confirmCalled      bool
+	selectDeviceResult string
+	selectDeviceErr    error
+	selectDeviceCalled bool
 }
 
 func (m *mockPrompter) InputEmail() (string, error)    { return m.email, m.emailErr }
@@ -39,6 +42,10 @@ func (m *mockPrompter) Confirm(string) (bool, error) {
 	return m.confirm, nil
 }
 func (m *mockPrompter) SelectProfile([]account.Profile, string) (string, error) { return "", nil }
+func (m *mockPrompter) SelectDevice(_ []ui.DeviceOption) (string, error) {
+	m.selectDeviceCalled = true
+	return m.selectDeviceResult, m.selectDeviceErr
+}
 
 // mockAppStore implements appstore.ProfileAppStore with configurable behavior.
 // No ipatool types — pure our-own types (adapter isolation verified).

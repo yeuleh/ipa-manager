@@ -78,7 +78,7 @@ T5 (device uninstall + 确认 + ErrAppNotInstalled)       ←─ 创建 uninstal
 - **Acceptance command**：`go build ./... && go vet ./... && go test ./internal/device/ ./internal/cli/ -count=1 && go test ./... -count=1`
 - **Rollback note**：删除旧 CLI stub（devices.go/install.go）是破坏性变更但被删为 stub（零用户依赖）；回滚 = git revert T1。root.go 命令树变更同上。
 
-### T2 — device apps + resolveDevice + SelectDevice
+### T2 — device apps + resolveDevice + SelectDevice ✅ COMPLETE
 
 - **US / AC / E2E**：US-05、US-06（**仅经 apps 命令可验证的子集**）；AC-05-1/2/3/4、AC-06-1/2/3/4/5（apps 路径）、AC-09-5（apps 分支）；E2E-010/011/012、E2E-026/028（apps 多设备交互/非TTY）、E2E-020/021（**apps 分支**——0 设备/--udid 未连，经 apps 命令验证）、E2E-074（apps 拒 `--profile` 分支）、E2E-092（**apps tunnel 分支**）。注：AC-06-3/4/5 的"多设备交互/非TTY/单台自动"经 apps 路径补 **supplementary CLI 测试**（由 AC-06 派生，不复用 e2e_test.md 中 E2E-022~025 的 install 用例 ID；那些 ID 在 e2e_test.md 中属 install 命令，归 T3）。
 - **目标**：`device apps` 可用；引入 `resolveDevice`（被 install/uninstall 复用）+ `ui.SelectDevice`+`ErrCancelled`。**install/uninstall 的选择路径 E2E 延后到 T3/T5**（命令尚未存在）。
@@ -226,3 +226,7 @@ T5 (device uninstall + 确认 + ErrAppNotInstalled)       ←─ 创建 uninstal
 - [Minor] `service.go` 删除了无功能 `var _ = ios.DeviceEntry{}` 引用与多余 import。✅ 已处理。
 - [Minor] `Backend` 注释澄清：类型导出（供 internal/device 内测试 double 实现），但因 `internal/` 包边界不外泄。✅ 已处理。
 - [Minor/决议] "NeedsTunnel 显示"措辞澄清：AC-01-1 固定 4 列（UDID/Name/iOS Version/Connection Type），无 tunnel 列；`NeedsTunnel` 是内部字段（T3 tunnel 诊断输入）。tunnel 提示在 install 时（AC-07-2）而非 device list。✅ 已澄清（plan §T1 措辞已更正）。
+
+### T2（已 complete）
+- [Minor] `ErrDeviceNotConnected` 哨兵未在 `--udid` 未连分支 `%w` 包装（当前用 `fmt.Errorf("device '%s' not connected")` 纯消息）。无 `errors.Is` 依赖，AC 不受影响；若未来需 `errors.Is` 可加包装。
+- [Minor] "connect 失败→Browse 未调"oracle 目前由代码早返回+nil conn 间接保证；可加显式 `browseCalled` 计数断言提升可证明性。

@@ -6,6 +6,10 @@
 // interface and the DeviceInfo / InstalledApp value types.
 package device
 
+import (
+	"github.com/danielpaulus/go-ios/ios"
+)
+
 // DeviceInfo is our device summary (no go-ios types leak to the CLI).
 type DeviceInfo struct {
 	UDID           string // ios.DeviceEntry.Properties.SerialNumber
@@ -23,6 +27,9 @@ type Service interface {
 	// with lockdown info (name/iOS version) best-effort. iOS 17+ devices are
 	// still listed via usbmuxd even without a tunnel (AC-07-1).
 	ListConnected() ([]DeviceInfo, error)
+	// ListInstalledApps lists user-installed apps on a device (excludes system
+	// apps). Connect-stage failure on iOS 17+ (rare) → ErrTunnelRequired.
+	ListInstalledApps(udid string) ([]InstalledApp, error)
 }
 
 // NewService constructs a Service backed by the given Backend.
@@ -61,3 +68,41 @@ func (s *backendService) ListConnected() ([]DeviceInfo, error) {
 
 // Compile-time assertion that backendService implements Service.
 var _ Service = (*backendService)(nil)
+
+// resolveEntry resolves a device entry by UDID plus best-effort lockdown info.
+// GetDeviceEntry failure is a hard error (returned). GetLockdownInfo failure is
+// best-effort (name/version left empty) — used for tunnel diagnosis only.
+func (s *backendService) resolveEntry(udid string) (entry ios.DeviceEntry, name, version string, err error) {
+	entry, err = s.backend.GetDeviceEntry(udid)
+	if err != nil {
+		return ios.DeviceEntry{}, "", "", err
+	}
+	name, version, _ = s.backend.GetLockdownInfo(entry)
+	return entry, name, version, nil
+}
+
+// ListInstalledApps implements Service.ListInstalledApps.
+func (s *backendService) ListInstalledApps(udid string) ([]InstalledApp, error) {
+	entry, _, version, err := s.resolveEntry(udid)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := s.backend.OpenInstallationProxy(entry) // connect-stage
+	if err != nil {
+		return nil, diagnoseConnectError(err, version) // iOS≥17 paired → ErrTunnelRequired; else raw
+	}
+	defer conn.Close()
+	apps, err := conn.BrowseUserApps() // operate-stage → raw error (never tunnel-misjudged)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]InstalledApp, len(apps))
+	for i, a := range apps {
+		result[i] = InstalledApp{
+			BundleID: a.CFBundleIdentifier(),
+			Name:     a.CFBundleName(),
+			Version:  a.CFBundleShortVersionString(),
+		}
+	}
+	return result, nil
+}

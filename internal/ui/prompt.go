@@ -2,9 +2,12 @@
 package ui
 
 import (
+	"errors"
+
 	"charm.land/huh/v2"
 
 	"github.com/yeuleh/ipa-manager/internal/account"
+	"github.com/yeuleh/ipa-manager/internal/apperr"
 )
 
 // prompter is the production implementation of Prompter using huh v2.
@@ -71,4 +74,26 @@ func (p *prompter) SelectProfile(profiles []account.Profile, activeID string) (s
 		Value(&selected).
 		Run()
 	return selected, err
+}
+
+// SelectDevice shows an interactive device picker. User abort (Ctrl+C/Esc)
+// maps to apperr.ErrCancelled so callers can treat it as exit 0.
+func (p *prompter) SelectDevice(options []DeviceOption) (string, error) {
+	var selected string
+	opts := make([]huh.Option[string], 0, len(options))
+	for _, o := range options {
+		opts = append(opts, huh.NewOption(o.Label, o.UDID))
+	}
+	err := huh.NewSelect[string]().
+		Title("Select device").
+		Options(opts...).
+		Value(&selected).
+		Run()
+	if err != nil {
+		if errors.Is(err, huh.ErrUserAborted) {
+			return "", apperr.ErrCancelled
+		}
+		return "", err
+	}
+	return selected, nil
 }

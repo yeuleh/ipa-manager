@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
+
+	"github.com/yeuleh/ipa-manager/internal/device"
 )
 
 // deviceCmd is the unified device command group (replaces the old top-level
@@ -14,7 +17,7 @@ func deviceCmd(deps Deps) *cobra.Command {
 		Use:   "device",
 		Short: "Manage connected iOS devices (list / apps / install / uninstall)",
 	}
-	cmd.AddCommand(deviceListCmd(deps))
+	cmd.AddCommand(deviceListCmd(deps), deviceAppsCmd(deps))
 	return cmd
 }
 
@@ -53,4 +56,46 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// deviceAppsCmd implements `device apps` (US-05). Lists user-installed apps on
+// the resolved device (excludes system apps).
+//
+// NOTE: --profile is intentionally NOT registered (AC-09-5): device apps is
+// account-agnostic; only `device install` accepts --profile.
+func deviceAppsCmd(deps Deps) *cobra.Command {
+	var udidFlag string
+	cmd := &cobra.Command{
+		Use:   "apps",
+		Short: "List user-installed apps on a device",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out := cmd.OutOrStdout()
+			dev, err := resolveDevice(deps, udidFlag)
+			if err != nil {
+				if isCancelled(err) {
+					fmt.Fprintln(out, "cancelled")
+					return nil
+				}
+				return err
+			}
+			apps, err := deps.DeviceService.ListInstalledApps(dev.UDID)
+			if err != nil {
+				if errors.Is(err, device.ErrTunnelRequired) {
+					return fmt.Errorf("iOS 17+ tunnel required; run: sudo ios tunnel start")
+				}
+				return err
+			}
+			if len(apps) == 0 {
+				fmt.Fprintf(out, "no user apps installed on device '%s'\n", orDash(dev.Name))
+				return nil
+			}
+			fmt.Fprintln(out, "BUNDLE-ID\tNAME\tVERSION")
+			for _, a := range apps {
+				fmt.Fprintf(out, "%s\t%s\t%s\n", a.BundleID, orDash(a.Name), orDash(a.Version))
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&udidFlag, "udid", "", "target device UDID (default: auto-select or prompt when multiple)")
+	return cmd
 }
