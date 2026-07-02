@@ -11,6 +11,7 @@ import (
 
 	"github.com/yeuleh/ipa-manager/internal/account"
 	"github.com/yeuleh/ipa-manager/internal/apperr"
+	"github.com/yeuleh/ipa-manager/internal/appstore"
 	"github.com/yeuleh/ipa-manager/internal/device"
 	"github.com/yeuleh/ipa-manager/internal/library"
 	"github.com/yeuleh/ipa-manager/internal/ui"
@@ -598,3 +599,193 @@ func TestDeviceInstall_DeviceHasApp_StillPushes(t *testing.T) {
 
 // newTrustErr builds an error whose message triggers the trust heuristic.
 func newTrustErr(msg string) error { return errors.New(msg) }
+
+// =============================================================================
+// T4: device install auto-download (US-03) + --latest (US-08) + mutex (AC-10-4)
+// =============================================================================
+
+func helperInstallAutoDeps(t *testing.T, store account.Store, as *mockAppStore, svc *mockDeviceService, lib library.Store) Deps {
+	t.Helper()
+	return Deps{
+		Store:           store,
+		LibraryStore:    lib,
+		DeviceService:   svc,
+		UI:              &mockPrompter{},
+		AppStoreFactory: func(account.Profile) (appstore.ProfileAppStore, error) { return as, nil },
+		ConfigRoot:      t.TempDir(),
+	}
+}
+
+// E2E-040 / AC-03-1: auto-download happy (library missing → download → install)
+func TestDeviceInstall_AutoDownload_Happy(t *testing.T) {
+	store := helperDownloadStore()
+	as := &mockAppStore{
+		accountInfoResult: appstore.AccountInfoResult{Email: "alice@test.com"},
+		lookupResult:      appstore.AppInfo{ID: 123, BundleID: "com.x", Name: "X", Version: "1.0"},
+		downloadResults:   []appstore.DownloadResult{{DestinationPath: "/tmp/x.ipa", Version: "1.0"}},
+		downloadErrors:    []error{nil},
+	}
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1", Name: "iPhone"}}}
+	lib := &mockLibraryStore{} // empty → triggers auto-download
+	deps := helperInstallAutoDeps(t, store, as, svc, lib)
+
+	out, err := runDeviceInstallCmd(t, deps, "com.x")
+	require.NoError(t, err)
+	assert.Equal(t, 1, as.downloadCalls, "Download must be called once")
+	assert.True(t, lib.addCalled, "LibraryStore.Add must be called (E2E-041)")
+	assert.Equal(t, "com.x", lib.addEntry.BundleID)
+	assert.Equal(t, "/tmp/x.ipa", svc.installPath, "Install pushes the downloaded IPA")
+	assert.Contains(t, out, "Downloaded", "AC-03-1: success reflects download step")
+	assert.Contains(t, out, "Installed", "AC-03-1: success reflects install step")
+}
+
+// E2E-042 / AC-03-3: auto-download no credentials
+func TestDeviceInstall_AutoDownload_NoCredentials(t *testing.T) {
+	store := &mockStore{
+		profiles:    []account.Profile{{ID: "alice", Email: "alice@test.com"}},
+		activeID:    "alice",
+		credentials: map[string]bool{"alice": false}, // not logged in
+	}
+	deps := helperInstallAutoDeps(t, store, &mockAppStore{}, &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1"}}}, &mockLibraryStore{})
+	_, err := runDeviceInstallCmd(t, deps, "com.x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no credentials")
+}
+
+// E2E-043 / AC-03-4: auto-download app not found
+func TestDeviceInstall_AutoDownload_AppNotFound(t *testing.T) {
+	store := helperDownloadStore()
+	as := &mockAppStore{lookupErr: apperr.ErrAppNotFound}
+	deps := helperInstallAutoDeps(t, store, as, &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1"}}}, &mockLibraryStore{})
+	_, err := runDeviceInstallCmd(t, deps, "com.x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "app not found")
+}
+
+// E2E-044 / AC-03-5: license required, user confirms → acquire → retry succeeds
+func TestDeviceInstall_AutoDownload_LicenseConfirm(t *testing.T) {
+	old := checkInteractive
+	checkInteractive = func() bool { return true }
+	defer func() { checkInteractive = old }()
+
+	store := helperDownloadStore()
+	as := &mockAppStore{
+		accountInfoResult: appstore.AccountInfoResult{Email: "a@t.com"},
+		lookupResult:      appstore.AppInfo{ID: 1, BundleID: "com.x", Name: "X", Version: "1.0", Price: 0},
+		downloadResults:   []appstore.DownloadResult{{}, {DestinationPath: "/tmp/x.ipa", Version: "1.0"}},
+		downloadErrors:    []error{apperr.ErrLicenseRequired, nil},
+	}
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1"}}}
+	lib := &mockLibraryStore{}
+	deps := helperInstallAutoDeps(t, store, as, svc, lib)
+	deps.UI = &mockPrompter{confirm: true}
+
+	_, err := runDeviceInstallCmd(t, deps, "com.x")
+	require.NoError(t, err)
+	assert.True(t, as.purchaseCalled, "Purchase must be called after confirm")
+	assert.Equal(t, 2, as.downloadCalls, "Download retried after license acquisition")
+	assert.Equal(t, 1, svc.installCalls)
+}
+
+// E2E-045 / AC-03-5: license required, user declines → cancelled exit 0
+func TestDeviceInstall_AutoDownload_LicenseDecline(t *testing.T) {
+	old := checkInteractive
+	checkInteractive = func() bool { return true }
+	defer func() { checkInteractive = old }()
+
+	store := helperDownloadStore()
+	as := &mockAppStore{
+		accountInfoResult: appstore.AccountInfoResult{Email: "a@t.com"},
+		lookupResult:      appstore.AppInfo{ID: 1, BundleID: "com.x", Name: "X", Version: "1.0", Price: 0},
+		downloadErrors:    []error{apperr.ErrLicenseRequired},
+	}
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1"}}}
+	lib := &mockLibraryStore{}
+	deps := helperInstallAutoDeps(t, store, as, svc, lib)
+	deps.UI = &mockPrompter{confirm: false}
+
+	out, err := runDeviceInstallCmd(t, deps, "com.x")
+	require.NoError(t, err, "decline is not an error (exit 0)")
+	assert.Contains(t, out, "cancelled")
+	assert.False(t, as.purchaseCalled, "Purchase must NOT be called on decline")
+	assert.Equal(t, 0, svc.installCalls, "Install must NOT be called on decline")
+}
+
+// E2E-046 / AC-03-6: license required, non-interactive → error exit 1
+func TestDeviceInstall_AutoDownload_LicenseNonInteractive(t *testing.T) {
+	old := checkInteractive
+	checkInteractive = func() bool { return false }
+	defer func() { checkInteractive = old }()
+
+	store := helperDownloadStore()
+	as := &mockAppStore{
+		accountInfoResult: appstore.AccountInfoResult{Email: "a@t.com"},
+		lookupResult:      appstore.AppInfo{ID: 1, BundleID: "com.x", Name: "X", Version: "1.0", Price: 0},
+		downloadErrors:    []error{apperr.ErrLicenseRequired},
+	}
+	deps := helperInstallAutoDeps(t, store, as, &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1"}}}, &mockLibraryStore{})
+
+	_, err := runDeviceInstallCmd(t, deps, "com.x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-interactively")
+}
+
+// E2E-050 / AC-08-1: --latest downloads newer version (preserving old)
+func TestDeviceInstall_Latest_DownloadsNewer(t *testing.T) {
+	store := helperDownloadStore()
+	as := &mockAppStore{
+		accountInfoResult: appstore.AccountInfoResult{Email: "a@t.com"},
+		lookupResult:      appstore.AppInfo{ID: 1, BundleID: "com.x", Name: "X", Version: "2.0"}, // App Store has 2.0
+		downloadResults:   []appstore.DownloadResult{{DestinationPath: "/tmp/v2.ipa", Version: "2.0"}},
+		downloadErrors:    []error{nil},
+	}
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1"}}}
+	lib := &mockLibraryStore{entries: []library.Entry{ipaEntry("com.x", "1.0", "/lib/v1.ipa", 5)}} // library has old 1.0
+	deps := helperInstallAutoDeps(t, store, as, svc, lib)
+
+	out, err := runDeviceInstallCmd(t, deps, "com.x", "--latest")
+	require.NoError(t, err)
+	assert.Equal(t, 1, as.downloadCalls, "must download 2.0 (library has 1.0)")
+	assert.Equal(t, "/tmp/v2.ipa", svc.installPath, "push the newly downloaded 2.0")
+	assert.Equal(t, "2.0", lib.addEntry.Version, "new v2.0 entry added to library (old v1.0 preserved by library.Store semantics)")
+	assert.Contains(t, out, "Installed")
+}
+
+// E2E-051 / AC-08-2: --latest already up to date → no download, push existing
+func TestDeviceInstall_Latest_AlreadyUpToDate(t *testing.T) {
+	store := helperDownloadStore()
+	as := &mockAppStore{
+		accountInfoResult: appstore.AccountInfoResult{Email: "a@t.com"},
+		lookupResult:      appstore.AppInfo{ID: 1, BundleID: "com.x", Name: "X", Version: "2.0"}, // same as library
+	}
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1"}}}
+	lib := &mockLibraryStore{entries: []library.Entry{ipaEntry("com.x", "2.0", "/lib/v2.ipa", 1)}}
+	deps := helperInstallAutoDeps(t, store, as, svc, lib)
+
+	out, err := runDeviceInstallCmd(t, deps, "com.x", "--latest")
+	require.NoError(t, err)
+	assert.Equal(t, 0, as.downloadCalls, "must NOT download when already up to date")
+	assert.Equal(t, "/lib/v2.ipa", svc.installPath, "push existing library IPA")
+	assert.Contains(t, out, "already up to date")
+}
+
+// E2E-052 / AC-08-3: --latest no credentials
+func TestDeviceInstall_Latest_NoCredentials(t *testing.T) {
+	store := &mockStore{
+		profiles:    []account.Profile{{ID: "alice"}},
+		activeID:    "alice",
+		credentials: map[string]bool{"alice": false},
+	}
+	deps := helperInstallAutoDeps(t, store, &mockAppStore{}, &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1"}}}, &mockLibraryStore{})
+	_, err := runDeviceInstallCmd(t, deps, "com.x", "--latest")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no credentials")
+}
+
+// E2E-063 / AC-10-4: --latest + --version mutually exclusive
+func TestDeviceInstall_LatestVersionMutex(t *testing.T) {
+	deps := helperInstallAutoDeps(t, helperDownloadStore(), &mockAppStore{}, &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1"}}}, &mockLibraryStore{})
+	_, err := runDeviceInstallCmd(t, deps, "com.x", "--latest", "--version", "1.0")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mutually exclusive")
+}
