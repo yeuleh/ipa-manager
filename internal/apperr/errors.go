@@ -31,7 +31,7 @@ var (
 	ErrLicenseRequired        = errors.New("license is required")
 	ErrPasswordTokenExpired   = errors.New("password token is expired")
 	ErrPaidAppNotSupported    = errors.New("paid apps are not supported")
-	ErrDownloadNonInteractive = errors.New("interactive confirmation required")
+	ErrDownloadNonInteractive = errors.New("license acquisition requires interactive confirmation")
 )
 
 // Device sentinels (mission: ios-device-manage).

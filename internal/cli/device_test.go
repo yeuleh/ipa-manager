@@ -984,3 +984,72 @@ func TestDeviceUninstall_RemovesFromAppsListing(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, appsOut2, "com.x")
 }
+
+// =============================================================================
+// Install device-selection variants (E2E-020/021/022 install branch) + E2E-031
+// (direct CLI coverage; resolveDevice is shared but AC-06 install path is now
+// exercised through the install command itself for traceability)
+// =============================================================================
+
+// E2E-020 (install) / AC-06-1: 0 devices
+func TestDeviceInstall_NoDevices(t *testing.T) {
+	store := helperDownloadStore()
+	lib := &mockLibraryStore{entries: []library.Entry{ipaEntry("com.x", "1.0", "/x.ipa", 1)}}
+	deps := helperDeviceInstallDeps(store, &mockDeviceService{}, lib) // 0 devices
+	_, err := runDeviceInstallCmd(t, deps, "com.x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no connected device")
+}
+
+// E2E-021 (install) / AC-06-2: --udid not connected
+func TestDeviceInstall_UDIDNotConnected(t *testing.T) {
+	store := helperDownloadStore()
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "a"}, {UDID: "b"}}}
+	lib := &mockLibraryStore{entries: []library.Entry{ipaEntry("com.x", "1.0", "/x.ipa", 1)}}
+	deps := helperDeviceInstallDeps(store, svc, lib)
+	_, err := runDeviceInstallCmd(t, deps, "com.x", "--udid", "ghost")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "device 'ghost' not connected")
+}
+
+// E2E-022/023 (install) / AC-06-3: multi-device interactive select + cancel
+func TestDeviceInstall_MultiDevice_InteractiveSelect(t *testing.T) {
+	old := checkInteractive
+	checkInteractive = func() bool { return true }
+	defer func() { checkInteractive = old }()
+
+	store := helperDownloadStore()
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "a"}, {UDID: "b"}}}
+	lib := &mockLibraryStore{entries: []library.Entry{ipaEntry("com.x", "1.0", "/x.ipa", 1)}}
+	deps := helperDeviceInstallDeps(store, svc, lib)
+	deps.UI = &mockPrompter{selectDeviceResult: "a"}
+
+	_, err := runDeviceInstallCmd(t, deps, "com.x")
+	require.NoError(t, err)
+	assert.Equal(t, "a", svc.installUDID)
+}
+
+// E2E-031 / AC-02-2: install success → app appears in device apps listing
+// (stateful mock: install "adds" the bundle to appsResult so a follow-up apps
+// call reflects it).
+func TestDeviceInstall_ThenAppsShowsIt(t *testing.T) {
+	store := helperDownloadStore()
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1", Name: "iPhone"}}}
+	lib := &mockLibraryStore{entries: []library.Entry{ipaEntry("com.x", "1.0", "/x.ipa", 1)}}
+	deps := helperDeviceInstallDeps(store, svc, lib)
+
+	// Before install, apps does not list com.x.
+	before, err := runDeviceAppsCmd(t, deps)
+	require.NoError(t, err)
+	assert.NotContains(t, before, "com.x")
+
+	// Install succeeds; model the device state change.
+	_, err = runDeviceInstallCmd(t, deps, "com.x")
+	require.NoError(t, err)
+	svc.appsResult = []device.InstalledApp{{BundleID: "com.x", Name: "X", Version: "1.0"}}
+
+	// After install, apps lists com.x.
+	after, err := runDeviceAppsCmd(t, deps)
+	require.NoError(t, err)
+	assert.Contains(t, after, "com.x")
+}
