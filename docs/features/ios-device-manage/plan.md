@@ -59,9 +59,9 @@ T5 (device uninstall + 确认 + ErrAppNotInstalled)       ←─ 创建 uninstal
 
 > 每个 task 完成标准统一含：**Spock review pass + 该 task 测试全绿 + `go build ./...` + `go vet ./...` 通过 + `go test ./... -count=1` 零回归**。
 
-### T1 — device list + device 包骨架 + 命令树重构
+### T1 — device list + device 包骨架 + 命令树重构 ✅ COMPLETE
 
-- **US / AC / E2E**：US-01；AC-01-1/2/3、AC-07-1（list 列出 iOS 17+ 设备 + NeedsTunnel 显示）；E2E-001/002/003/004、E2E-090、E2E-074（list 拒 `--profile` 分支）
+- **US / AC / E2E**：US-01；AC-01-1/2/3、AC-07-1（list 列出 iOS 17+ 设备；NeedsTunnel 作为 **内部字段**计算供 T3 tunnel 诊断用，**非 CLI 显示列**——AC-01-1 固定 4 列）；E2E-001/002/003/004、E2E-090、E2E-074（list 拒 `--profile` 分支）
 - **目标**：`device list` 可用；建立 device.Service/Backend/DeviceInfo/defaultBackend 骨架；移除旧 `devices`+`install` stub，统一 `device` 命令组。
 - **新建文件**：
   - `internal/device/service.go` — `Service` 接口（仅 `ListConnected()`，余方法后续 task 加）、`DeviceInfo`（UDID/Name/IOSVersion/ConnectionType/NeedsTunnel）、`NewService(backend Backend)`、`backendService.ListConnected()`（Backend.ListDeviceEntries + best-effort GetLockdownInfo → DeviceInfo）
@@ -216,3 +216,13 @@ T5 (device uninstall + 确认 + ErrAppNotInstalled)       ←─ 创建 uninstal
 - **`--latest` 边界**：T3 不注册该 flag（避免半实现），T4 注册 + 互斥校验
 
 执行者可据此直接实现；仅 live 可验行为（installationproxy iOS17+ tunnel、ErrAppNotInstalled 字符串模式）按 design 标注的执行期/live 验证处理。无 placeholder。
+
+## 9. Minor Findings（task ledger，validate 阶段 triage）
+
+> Spock per-task review 产出的 Minor 项，不阻塞 task 推进，记录于此供 validate 阶段统一 triage。
+
+### T1（已 complete）
+- [Minor] CLI 测试已补 root-command 路径验证（`TestRoot_RegistersDeviceListCommand`，确认 device list 经 root 注册 + 旧 devices/install stub 已移除）。✅ 已处理。
+- [Minor] `service.go` 删除了无功能 `var _ = ios.DeviceEntry{}` 引用与多余 import。✅ 已处理。
+- [Minor] `Backend` 注释澄清：类型导出（供 internal/device 内测试 double 实现），但因 `internal/` 包边界不外泄。✅ 已处理。
+- [Minor/决议] "NeedsTunnel 显示"措辞澄清：AC-01-1 固定 4 列（UDID/Name/iOS Version/Connection Type），无 tunnel 列；`NeedsTunnel` 是内部字段（T3 tunnel 诊断输入）。tunnel 提示在 install 时（AC-07-2）而非 device list。✅ 已澄清（plan §T1 措辞已更正）。
