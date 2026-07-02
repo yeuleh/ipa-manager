@@ -52,20 +52,26 @@
 
 ### device selection（US-06，横切 install/apps/uninstall）
 
+> 横切断言：以下 case 用 install 代表，但 **apps/uninstall 必须接入同一 `resolveDevice` helper**——为此另设 E2E-026/027/028 验证 apps 与 uninstall 也走该路径（防止漏接）。mock 函数调用断言（如 `mock Install 收到 udid`）是**外部边界副作用 oracle**（验证传入 Service 的参数），非内部实现耦合。
+
 | ID | AC | type | Given/When/Then |
 |----|----|------|-----------------|
-| E2E-020 | AC-06-1 | failure `[AUTO]` | Given mock 返回 0 台；When `device install <bid>`（及 apps/uninstall 各一例）；Then `"no connected device; connect a device and trust this Mac"`，exit 1 |
-| E2E-021 | AC-06-2 | failure `[AUTO]` | Given 2 台（udid=a,b）；When `device install <bid> --udid ghost`；Then `"device 'ghost' not connected"`，exit 1 |
+| E2E-020 | AC-06-1 | failure `[AUTO]` | Given mock 返回 0 台；When `device install <bid>`（及 `device apps`/`device uninstall <bid>` 各一例）；Then `"no connected device; connect a device and trust this Mac"`，exit 1 |
+| E2E-021 | AC-06-2 | failure `[AUTO]` | Given 2 台（udid=a,b）；When `device install <bid> --udid ghost`（及 apps/uninstall 各一例）；Then `"device 'ghost' not connected"`，exit 1 |
 | E2E-022 | AC-06-3 | happy `[AUTO]` | Given 2 台 + mockUI.SelectDevice 返回 a；When `device install <bid>`（无 --udid，TTY）；Then mock DeviceService.Install 收到 udid=a，exit 0 |
-| E2E-023 | AC-06-3 | edge `[AUTO]` | Given 2 台 + mockUI.SelectDevice 返回 cancelled；When `device install <bid>`；Then `"cancelled"`，exit 0（不调 Install） |
+| E2E-023 | AC-06-3 | edge `[AUTO]` | Given 2 台 + mockUI.SelectDevice 返回 ErrCancelled；When `device install <bid>`；Then `"cancelled"`，exit 0（不调 Install） |
 | E2E-024 | AC-06-4 | failure `[AUTO]` | Given 2 台 + checkInteractive()=false；When `device install <bid>`；Then `"multiple devices connected; specify --udid (non-interactive mode)"`，exit 1 |
 | E2E-025 | AC-06-5 | happy `[AUTO]` | Given 1 台；When `device install <bid>`；Then 自动选中该台（mock Install 收到其 udid，无 prompt），exit 0 |
+| E2E-026 | AC-06-3/AC-05-3 | happy `[AUTO]` | Given 2 台 + mockUI.SelectDevice 返回 a；When `device apps`（无 --udid，TTY）；Then mock ListInstalledApps 收到 udid=a（证明 apps 接入 resolveDevice），exit 0 |
+| E2E-027 | AC-06-3 | happy `[AUTO]` | Given 2 台 + mockUI.SelectDevice 返回 a + 确认 yes；When `device uninstall <bid>`（无 --udid，TTY）；Then mock Uninstall 收到 udid=a（证明 uninstall 接入 resolveDevice），exit 0 |
+| E2E-028 | AC-06-4 | failure `[AUTO]` | Given 2 台 + 非TTY；When `device apps`；Then `"multiple devices connected; specify --udid (non-interactive mode)"`，exit 1（apps 也拒绝） |
 
 ### device install — push from library（US-02）
 
 | ID | AC | type | Given/When/Then |
 |----|----|------|-----------------|
 | E2E-030 | AC-02-1 | happy `[AUTO]` | Given active profile + LibraryStore.Get 返回 1 entry（FilePath=/x.ipa）+ 1 台设备 + mock Install=nil；When `device install <bid>`；Then mock Install 收到 (udid,"/x.ipa")，stdout 含 "Installed"+app+version+设备名，exit 0 |
+| E2E-030b | AC-02-4 | happy `[AUTO]` | Given 2 台（udid=a,b）+ LibraryStore 有 entry + mock Install 按 udid 记录；When `device install <bid> --udid b`；Then mock Install 收到 udid=b（显式 --udid 选中，非自动），exit 0（直接验证 AC-02-4，非 E2E-025 单台等价） |
 | E2E-031 | AC-02-2 | happy `[AUTO]` | Given install 成功；When（同流程）mock ListInstalledApps 含该 bid；Then apps 输出含该 app（验证 install 副作用可见） |
 | E2E-032 | AC-02-7 | failure `[AUTO]` | Given mock Install 返回 trust 错误（"device not paired"）；When `device install <bid>`；Then 错误含 trust 提示（"trust this Mac"），exit 1 |
 | E2E-033 | AC-02-8 | failure `[AUTO]` | Given 无 active profile（mockStore activeID=""）；When `device install <bid>`；Then 错误含 "no active profile"+"accounts use"，exit 1 |
@@ -127,12 +133,16 @@
 
 ### iOS 17+ tunnel（US-07）
 
+> tunnel 检测为版本感知+失败驱动（design DD-02）：mock 在 `device.Service` 层注入——CLI 测试让 mock ListInstalledApps/Install/Uninstall 在 iOS 17+ 场景返回 `ErrTunnelRequired`；device 包单测（mock Backend）验证 `diagnoseServiceError` 把 iOS≥17 的 Backend 错误翻译为 ErrTunnelRequired。
+
 | ID | AC | type | Given/When/Then |
 |----|----|------|-----------------|
-| E2E-090 | AC-07-1 | happy `[AUTO]` | Given mock DeviceService.ListConnected 返回 1 台 NeedsTunnel=true；When `device list`；Then 该设备被列出（usbmuxd 可见），exit 0 |
-| E2E-091 | AC-07-2 | failure `[AUTO]` | Given LibraryStore 有 IPA + mock Install 返回 ErrTunnelRequired；When `device install <bid>`；Then stderr/stdout 含 `"iOS 17+ tunnel required; run: sudo ios tunnel start"`，exit 1（不执行推送） |
+| E2E-090 | AC-07-1 | happy `[AUTO]` | Given mock DeviceService.ListConnected 返回 1 台 NeedsTunnel=true（iOS≥17）；When `device list`；Then 该设备被列出（usbmuxd 可见），exit 0 |
+| E2E-091 | AC-07-2 | failure `[AUTO]` | Given LibraryStore 有 IPA + mock DeviceService.Install 返回 ErrTunnelRequired；When `device install <bid>`；Then 输出含 `"iOS 17+ tunnel required; run: sudo ios tunnel start"`，exit 1；**oracle**：mock Install 被调用并返回 ErrTunnelRequired（边界副作用），且 install 编排不再有后续推送动作（Service 是边界，其内部 SendFile 未达由 device 包单测验证） |
 | E2E-092 | AC-07-3 | failure `[AUTO]` | Given mock ListInstalledApps 返回 ErrTunnelRequired；When `device apps`；Then 同 tunnel 提示，exit 1（同验证 uninstall 一例） |
 | E2E-093 | AC-07-4 | NFR `[AUTO]`+审计 | Given 源码；When grep 执行路径；Then 无 `exec.Command("sudo"...)` / 无 `tunnel` 包 import 于 cli+device 执行路径；CLI 行为：缺 tunnel 时仅打印提示 exit 1，不请求密码 |
+| E2E-093b | DD-02 | unit `[AUTO]` | Given device 包单测 mock Backend.SendFile 返回 generic err + GetProductVersion 返回 "17.5"；When Service.Install；Then 返回 ErrTunnelRequired（iOS≥17 定向）。另：GetProductVersion="16.0" + 同 err → 原样上浮（不误判 tunnel） |
+| E2E-093c | AC-07-3 | NFR `[MANUAL]` | Given iOS 17+ 真机未启 tunnel；When `device apps`/`device uninstall`；Then **观察**：若成功（installationproxy 走 usbmuxd）→ AC-07-3 对 apps/uninstall 不适用（regress requirements 收窄）；若失败 → 触发 tunnel 提示。validate 阶段定论 |
 
 ### NFR 审计与回归
 
@@ -162,7 +172,7 @@
 | US-02 install push | AC-02-1 | E2E-030 | ✅ |
 | | AC-02-2 | E2E-031 | ✅ |
 | | AC-02-3 | E2E-020 | ✅（横切） |
-| | AC-02-4 | E2E-025 | ✅（单台自动即 --udid 等价）+ E2E-012 apps --udid |
+| | AC-02-4 | E2E-030b | ✅（直接 case） |
 | | AC-02-5 | E2E-021 | ✅ |
 | | AC-02-6 | E2E-022, E2E-023 | ✅ |
 | | AC-02-7 | E2E-032 | ✅ |
@@ -182,16 +192,16 @@
 | | AC-04-6 | E2E-020 | ✅（横切） |
 | US-05 device apps | AC-05-1 | E2E-010 | ✅ |
 | | AC-05-2 | E2E-011 | ✅ |
-| | AC-05-3 | E2E-022（交互选择横切） | ✅ |
+| | AC-05-3 | E2E-026 | ✅（apps 直接接入 resolveDevice） |
 | | AC-05-4 | E2E-012 | ✅ |
 | US-06 device selection | AC-06-1 | E2E-020 | ✅ |
 | | AC-06-2 | E2E-021 | ✅ |
-| | AC-06-3 | E2E-022, E2E-023 | ✅ |
-| | AC-06-4 | E2E-024 | ✅ |
+| | AC-06-3 | E2E-022, E2E-023, E2E-026, E2E-027 | ✅（install+apps+uninstall 均验证） |
+| | AC-06-4 | E2E-024, E2E-028 | ✅（install+apps） |
 | | AC-06-5 | E2E-025 | ✅ |
 | US-07 tunnel | AC-07-1 | E2E-090 | ✅ |
-| | AC-07-2 | E2E-091 | ✅ |
-| | AC-07-3 | E2E-092 | ✅ |
+| | AC-07-2 | E2E-091, E2E-093b | ✅ |
+| | AC-07-3 | E2E-092, E2E-093c | ✅（apps/uninstall 适用性 validate 定论） |
 | | AC-07-4 | E2E-093 | ✅ |
 | US-08 --latest | AC-08-1 | E2E-050 | ✅ |
 | | AC-08-2 | E2E-051 | ✅ |
@@ -212,12 +222,12 @@
 
 | 层 | 文件 | 覆盖 |
 |----|------|------|
-| device 包单测 | `internal/device/service_test.go` | mock Backend：ListConnected 映射 DeviceInfo（含 lockdown 失败 best-effort）/ tunnel 翻译（SupportsRsd + 字符串匹配）/ BrowseUserApps→InstalledApp 映射 / Install 调 zipconduit / Uninstall 调 installationproxy |
+| device 包单测 | `internal/device/service_test.go` | mock Backend：ListConnected 映射 DeviceInfo（含 lockdown 失败 best-effort）/ DD-02 版本感知诊断（iOS≥17 错误→ErrTunnelRequired，iOS<17 原样）/ BrowseUserApps→InstalledApp 映射 / Install 调 zipconduit / Uninstall 调 installationproxy / ErrAppNotInstalled 识别 |
 | CLI E2E | `internal/cli/device_test.go` | 上表全部 `[AUTO]` E2E case |
 | 既有 mock 复用 | `mockStore`/`mockAppStore`/`mockLibraryStore`（已存在） | profile/AppStore/library 注入 |
 | 新 mock | `mockDeviceService`（实现 device.Service） | 记录 Install/Uninstall/ListConnected/ListInstalledApps 调用参数 + 可配置返回值/错误 |
 | 新 mock | `mockUI.SelectDevice` 扩展 | 现有 mockPrompter 加 SelectDevice 字段 |
-| download_core 回归 | 既有 `app_download_test.go` | runDownload 委托 downloadToLibrary 后行为不变（全绿） |
+| app download 回归 | 既有 `app_download_test.go` | app_download.go **不改**（DD-04），其测试原样全绿（NFR-07）；install 复用 handleDownloadError 系列，行为由 device_test 覆盖 |
 
 ### Pass/Fail 判据
 
