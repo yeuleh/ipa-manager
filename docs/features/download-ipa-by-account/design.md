@@ -519,6 +519,7 @@ User: ipa-manager app download <bundle-id>
   │    └─ no --output → OutputPath = library directory = "<configRoot>/library/<profileID>/"
   │         （ipatool 的 resolveDestinationPath 检测到目录后会用下载响应中的版本生成文件名，
   │          因此 --external-version-id 的版本也正确嵌入文件名）
+  │         [os.MkdirAll(OutputPath, 0o700)] ← resource-flow fix: 确保 ipatool 写入前目录存在
   │
   ├─ [computeSkipCheckPath(outputPath, app, --external-version-id)] → targetFileForStat（MV-01 fix）
   │    ├─ --external-version-id given → targetFileForStat = ""（SKIP CHECK BYPASS）
@@ -688,6 +689,13 @@ library clean [bundle-id]
 **决策**：在 `internal/cli/helpers.go` 新增 `resolveProfile()` 函数，所有需要 profile 的命令共用。
 
 > **Store 生命周期约定**（data-flow audit fix）：每次 CLI 调用是新进程，`newProductionDeps()` 创建的 Store 内存状态为空。`resolveProfile()` **统一负责调 `deps.Store.Load()`**，确保 config.json 已读入内存后再做任何 Store 读取。这是所有命令的前置条件——不在各命令 RunE 中分散调用。
+
+> **文件系统资源初始化约定**（resource-flow audit fix）：任何步骤向文件系统写入文件前，其**父目录必须已存在**。具体：
+> - library 目录 `<configRoot>/library/<profileID>/`：由 download 命令在调 ipatool Download 前 `os.MkdirAll`（ipatool 不创建目录）。
+> - index.json 父目录：由 `library.Store.writeIndex()` 内部 `MkdirAll`（已实现，DD-02）。
+> - `--output` 自定义路径的父目录：由 `validateOutputPath()` 校验已存在（AC-10-4），ipatool 直接写入。
+>
+> **设计审计方法论扩展**：数据流闭环验证（每个值由谁产出）须同时检查**资源依赖闭环**——每个步骤访问的文件系统对象（目录/文件），其创建者必须在流程中显式存在。
 
 ```go
 // resolveProfile resolves the target profile from --profile flag or active.
