@@ -8,9 +8,9 @@ package device
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/danielpaulus/go-ios/ios"
+	"github.com/danielpaulus/go-ios/ios/installationproxy"
 
 	"github.com/yeuleh/ipa-manager/internal/apperr"
 )
@@ -157,25 +157,30 @@ func (s *backendService) Uninstall(udid, bundleID string) error {
 		return diagnoseConnectError(err, version) // iOS≥17 paired → ErrTunnelRequired; else raw
 	}
 	defer conn.Close()
-	if err := conn.Uninstall(bundleID); err != nil {
-		// operate-stage: never tunnel. Map "not installed" → ErrAppNotInstalled
-		// (exact pattern confirmed live at validate; heuristics cover common forms).
-		if isNotInstalledErr(err) {
-			return apperr.ErrAppNotInstalled
-		}
+
+	// Pre-check: confirm the bundle is installed. go-ios treats uninstalling a
+	// non-existent app as idempotent SUCCESS (live-confirmed on iOS 26), which
+	// would mislead the user ("✓ Uninstalled" for a typo / absent bundle). We
+	// surface it as ErrAppNotInstalled so the user knows nothing was removed
+	// (AC-04-3). This replaces the unreliable error-string heuristic.
+	apps, err := conn.BrowseUserApps()
+	if err != nil {
 		return err
 	}
-	return nil
+	if !bundleInstalled(apps, bundleID) {
+		return apperr.ErrAppNotInstalled
+	}
+	return conn.Uninstall(bundleID)
 }
 
-// isNotInstalledErr reports whether a go-ios uninstall error indicates the
-// bundle is not installed on the device. go-ios returns a generic error here
-// (no exported sentinel), so a heuristic is used. The exact pattern is
-// confirmed against a real device at validate; this covers common forms.
-func isNotInstalledErr(err error) bool {
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "not installed") ||
-		strings.Contains(msg, "no such app") ||
-		strings.Contains(msg, "not found") ||
-		strings.Contains(msg, "does not exist")
+// bundleInstalled reports whether bundleID is present among the device's
+// (user) installed apps. installationproxy.AppInfo is map[string]any; the
+// CFBundleIdentifier() accessor reads the bundle id.
+func bundleInstalled(apps []installationproxy.AppInfo, bundleID string) bool {
+	for _, a := range apps {
+		if a.CFBundleIdentifier() == bundleID {
+			return true
+		}
+	}
+	return false
 }

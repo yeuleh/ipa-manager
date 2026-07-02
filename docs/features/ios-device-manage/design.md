@@ -328,11 +328,12 @@ type Deps struct {
 | `cli.Deps.DeviceService` | field（新） | device.Service 注入 |
 | `apperr.ErrCancelled` | sentinel（新） | 用户主动取消（SelectDevice / license no）；exit 0 |
 | `apperr.ErrDeviceNotConnected` / `ErrMultipleDevices` | sentinels（新） | 设备选择错误（NFR-04 文案统一） |
-| `apperr.ErrAppNotInstalled` | sentinel（新） | uninstall 未装（AC-04-3）；device.Service 从 go-ios generic error 识别（执行期经 live 确认匹配模式，见下） |
+| `apperr.ErrAppNotInstalled` | sentinel（新） | uninstall 未装（AC-04-3）；device.Service 经 **pre-check**（BrowseUserApps 确认存在）判定，见下 |
 
-**ErrAppNotInstalled / trust 错误识别（Spock #6）**：go-ios 的 `installationproxy.Uninstall` 与 trust 错误是 generic error（无导出 sentinel）。
-- **ErrAppNotInstalled**：device.Service.Uninstall 在 operate 阶段调 `conn.Uninstall(bundleID)`；若返回错误且字符串含 "not installed"/"no such app"（执行期 live 确认确切模式）→ 包装 `ErrAppNotInstalled`；否则原样上浮。备选更稳方案：uninstall 前先 `conn.BrowseUserApps()` 确认存在（多一次往返但可靠）——执行期权衡，design 倾向错误字符串匹配（少一次往返），live 验证不准则改 pre-check。
-- **trust 错误**：device.Service 原样上浮 go-ios 错误；CLI 层 heuristic（字符串含 "pair"/"trust"/"not paired"）追加 `"trust this Mac on the device"` 提示（AC-02-7）。trust 错误变体多，heuristic 足够（非 tunnel，不影响 DD-02 的 iOS 17+ 定向）。
+**ErrAppNotInstalled / trust 错误识别**：
+- **ErrAppNotInstalled（pre-check 机制，live 确认后定型）**：device.Service.Uninstall 在 connect 成功后、调 `conn.Uninstall` **之前**，先 `conn.BrowseUserApps()` 确认 bundle 存在；不存在 → `ErrAppNotInstalled`（AC-04-3）。
+  - **为何 pre-check 而非错误字符串匹配**：live 实测（iOS 26）证实 go-ios `installationproxy.Uninstall` 对未装 bundle **幂等成功**（"done uninstalling"，根本不报错）——初稿设想的"匹配 go-ios uninstall 错误字符串"方案失效（错误永不产生）。pre-check（BrowseUserApps）是 design 原预留 fallback，现升为主方案。代价：多一次 BrowseUserApps 往返；收益：可靠命中 AC-04-3 + 防止"typo → 误导性 ✓ Uninstalled"。
+- **trust 错误**：device.Service 原样上浮 go-ios 错误；CLI 层 heuristic（字符串含 "pair"/"trust"/"not paired"）追加 `"trust this Mac on the device"` 提示（AC-02-7）。trust 错误变体多，heuristic 足够（非 tunnel，不影响 DD-02 的 iOS 17+ 定向）。trust heuristic 的确切命中待 validate 真机确认。
 
 ### 3.2 状态与持久化
 
@@ -482,9 +483,9 @@ report success: "✓ Installed <app> <ver> → <dev.Name>"                      
        → conn, err = Backend.OpenInstallationProxy(entry)  【连接阶段，usbmuxd】
        → err != nil → diagnoseConnectError(err, version)  【iOS≥17 且真失败→tunnel；否则原样】
        → defer conn.Close()
-       → err = conn.Uninstall(bid)  【操作阶段】
-            未装错误 → ErrAppNotInstalled (AC-04-3)
-            其他 → 原样上浮
+       → apps = conn.BrowseUserApps()  【pre-check】
+       → bundle 不在 apps → ErrAppNotInstalled (AC-04-3，go-ios 幂等成功故需 pre-check)
+       → conn.Uninstall(bid)  【operate 阶段，原样上浮】
   ⑤ 成功: "✓ Uninstalled <bid> from <dev.Name>" exit 0
 ```
 

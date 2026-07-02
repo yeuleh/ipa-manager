@@ -511,7 +511,7 @@ func splitTestURL(t *testing.T, url string) (host, port string) {
 // =============================================================================
 
 func TestUninstall_Happy(t *testing.T) {
-	conn := &mockProxyConn{}
+	conn := &mockProxyConn{apps: []installationproxy.AppInfo{appInfo("com.x", "X", "1.0")}}
 	backend := &mockBackend{
 		entries:   []ios.DeviceEntry{entry("u1", "USB")},
 		lockdown:  map[string]lockdownResult{"u1": {name: "iPhone", version: "16.0"}},
@@ -527,7 +527,11 @@ func TestUninstall_Happy(t *testing.T) {
 }
 
 func TestUninstall_NotInstalled_ErrAppNotInstalled(t *testing.T) {
-	conn := &mockProxyConn{uninstallErr: newErr("app not installed on device")}
+	// Pre-check: bundle not in BrowseUserApps → ErrAppNotInstalled, Uninstall
+	// never called. (go-ios treats uninstalling a non-existent app as idempotent
+	// success — live-confirmed on iOS 26 — so we pre-check instead of relying
+	// on an error string that never arrives.)
+	conn := &mockProxyConn{apps: []installationproxy.AppInfo{appInfo("com.other", "Other", "1.0")}}
 	backend := &mockBackend{
 		entries:   []ios.DeviceEntry{entry("u1", "USB")},
 		lockdown:  map[string]lockdownResult{"u1": {name: "iPhone", version: "17.5"}},
@@ -536,7 +540,8 @@ func TestUninstall_NotInstalled_ErrAppNotInstalled(t *testing.T) {
 	svc := NewService(backend)
 
 	err := svc.Uninstall("u1", "com.x")
-	require.ErrorIs(t, err, apperr.ErrAppNotInstalled, "operate 'not installed' → ErrAppNotInstalled")
+	require.ErrorIs(t, err, apperr.ErrAppNotInstalled, "bundle absent from apps → ErrAppNotInstalled via pre-check")
+	assert.False(t, conn.uninstallCalled, "Uninstall must NOT be called when bundle absent")
 }
 
 func TestUninstall_ConnectFail_iOS17_Tunnel(t *testing.T) {
@@ -552,7 +557,12 @@ func TestUninstall_ConnectFail_iOS17_Tunnel(t *testing.T) {
 }
 
 func TestUninstall_OperateOtherError_RawNotTunnel(t *testing.T) {
-	conn := &mockProxyConn{uninstallErr: newErr("some device error")}
+	// Pre-check passes (bundle present), then Uninstall itself fails → raw
+	// operate error (never tunnel, never ErrAppNotInstalled).
+	conn := &mockProxyConn{
+		apps:         []installationproxy.AppInfo{appInfo("com.x", "X", "1.0")}, // present → pre-check OK
+		uninstallErr: newErr("some device error"),
+	}
 	backend := &mockBackend{
 		entries:   []ios.DeviceEntry{entry("u1", "USB")},
 		lockdown:  map[string]lockdownResult{"u1": {name: "iPhone", version: "17.5"}},
@@ -562,6 +572,6 @@ func TestUninstall_OperateOtherError_RawNotTunnel(t *testing.T) {
 
 	err := svc.Uninstall("u1", "com.x")
 	require.NotErrorIs(t, err, ErrTunnelRequired, "operate error never tunnel")
-	require.NotErrorIs(t, err, apperr.ErrAppNotInstalled, "non-not-installed error is raw")
+	require.NotErrorIs(t, err, apperr.ErrAppNotInstalled, "bundle present → not 'not installed'")
 	assert.Contains(t, err.Error(), "some device error")
 }
