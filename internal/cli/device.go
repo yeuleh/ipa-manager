@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/yeuleh/ipa-manager/internal/apperr"
 	"github.com/yeuleh/ipa-manager/internal/device"
 )
 
@@ -17,7 +18,7 @@ func deviceCmd(deps Deps) *cobra.Command {
 		Use:   "device",
 		Short: "Manage connected iOS devices (list / apps / install / uninstall)",
 	}
-	cmd.AddCommand(deviceListCmd(deps), deviceAppsCmd(deps), deviceInstallCmd(deps))
+	cmd.AddCommand(deviceListCmd(deps), deviceAppsCmd(deps), deviceInstallCmd(deps), deviceUninstallCmd(deps))
 	return cmd
 }
 
@@ -56,6 +57,61 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// deviceUninstallCmd implements `device uninstall` (US-04). Removes an app from
+// the resolved device with a confirmation prompt (destructive). Non-interactive
+// mode refuses (safe default). Account-agnostic (no --profile).
+func deviceUninstallCmd(deps Deps) *cobra.Command {
+	var udidFlag string
+	cmd := &cobra.Command{
+		Use:   "uninstall <bundle-id>",
+		Short: "Uninstall an app from a device",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out := cmd.OutOrStdout()
+			bundleID := args[0]
+
+			dev, err := resolveDevice(deps, udidFlag)
+			if err != nil {
+				if isCancelled(err) {
+					fmt.Fprintln(out, "cancelled")
+					return nil
+				}
+				return err
+			}
+
+			// AC-04-4: non-interactive mode refuses destructive uninstall.
+			if !checkInteractive() {
+				return fmt.Errorf("confirmation required in non-interactive mode; cannot proceed")
+			}
+
+			// AC-04-1: confirmation prompt (destructive).
+			fmt.Fprintf(out, "uninstall '%s' from device '%s'? [y/N]\n", bundleID, orDash(dev.Name))
+			confirmed, err := deps.UI.Confirm("confirm uninstall?")
+			if err != nil {
+				return fmt.Errorf("failed to prompt: %w", err)
+			}
+			if !confirmed {
+				fmt.Fprintln(out, "cancelled")
+				return nil
+			}
+
+			if err := deps.DeviceService.Uninstall(dev.UDID, bundleID); err != nil {
+				if errors.Is(err, device.ErrTunnelRequired) {
+					return fmt.Errorf("iOS 17+ tunnel required; run: sudo ios tunnel start")
+				}
+				if errors.Is(err, apperr.ErrAppNotInstalled) {
+					return fmt.Errorf("app '%s' not installed on device", bundleID) // AC-04-3
+				}
+				return err
+			}
+			fmt.Fprintf(out, "✓ Uninstalled %s from %s\n", bundleID, orDash(dev.Name))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&udidFlag, "udid", "", "target device UDID (default: auto-select or prompt when multiple)")
+	return cmd
 }
 
 // deviceAppsCmd implements `device apps` (US-05). Lists user-installed apps on

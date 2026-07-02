@@ -123,7 +123,7 @@ T5 (device uninstall + 确认 + ErrAppNotInstalled)       ←─ 创建 uninstal
 - **Acceptance command**：`go build ./... && go vet ./... && go test ./internal/cli/ -count=1 -run 'InstallAutoDownload|InstallLatest|InstallFlagConflict' && go test ./... -count=1`（**app_download_test 必须仍绿**——证明未改 app_download.go，NFR-07 证据）
 - **Rollback note**：仅扩展 device_install.go（downloadToLibrary + 决策树分支）+ device.go 注册 flag。**注意**：auto-download 会在 library 产生持久化副作用（新 IPA 文件 + library index entry）；代码 revert **不自动清除**已下载的 IPA/entry——用户可用 `library clean [bid]` 手动清理。
 
-### T5 — device uninstall + 确认 + ErrAppNotInstalled
+### T5 — device uninstall + 确认 + ErrAppNotInstalled ✅ COMPLETE
 
 - **US / AC / E2E**：US-04、US-06（uninstall 变体）、AC-04-1/2/3/4/5/6、AC-06-1~5（**uninstall 变体**）、AC-09-5（uninstall 分支）、AC-07-3（uninstall tunnel 分支）；E2E-080/081/082/083/084/085、E2E-027（uninstall 多设备交互）、E2E-020/021（**uninstall 变体**）、E2E-074（uninstall 拒 `--profile` 分支）、E2E-092（**uninstall tunnel 分支**）
 - **目标**：`device uninstall <bid>` 可用（二次确认 + 非TTY拒绝 + ErrAppNotInstalled）。
@@ -227,12 +227,19 @@ T5 (device uninstall + 确认 + ErrAppNotInstalled)       ←─ 创建 uninstal
 - [Minor] `Backend` 注释澄清：类型导出（供 internal/device 内测试 double 实现），但因 `internal/` 包边界不外泄。✅ 已处理。
 - [Minor/决议] "NeedsTunnel 显示"措辞澄清：AC-01-1 固定 4 列（UDID/Name/iOS Version/Connection Type），无 tunnel 列；`NeedsTunnel` 是内部字段（T3 tunnel 诊断输入）。tunnel 提示在 install 时（AC-07-2）而非 device list。✅ 已澄清（plan §T1 措辞已更正）。
 
-### T4（已 complete）
+### T5（已 complete）
+- [Minor→已修] Spock Important 已修：补齐 T5 E2E 变体——`TestDeviceUninstall_NoDevices`（AC-06-1）、`_UDIDNotConnected`（AC-06-2）、`_MultiDevice_InteractiveSelect`（E2E-027）、`_RemovesFromAppsListing`（E2E-082，stateful mock：Uninstall 后 apps 不再含该 bundle）。
+- [Minor→已修] `ConfirmYes` 断言完整 `[y/N]` prompt。
+- [Minor/validate] `isNotInstalledErr` 字符串匹配（not installed/no such app/not found/does not exist）偏宽，validate 真机确认确切模式后收窄或改 pre-check（BrowseUserApps 确认存在）。
+- [Minor] uninstall 非交互消息用 AC-04-4 精确文案（"confirmation required in non-interactive mode; cannot proceed"），非复用 ErrDownloadNonInteractive。
 - [Minor→已修] Spock Important 1 已修：downloadToLibrary 成功打印 `✓ Downloaded: ...`（AC-03-1 下载+安装两步可见）。
 - [Minor→已修] Spock Important 2 已修：`--latest` 的 LibraryStore.Get 错误不再忽略（surface "failed to query library"）。
 - [Minor→已修] license decline 不再重复打印 `cancelled`（handleLicenseRequired 已打印；runDeviceInstall 的 IPA-source cancel 分支不重打印；device-select cancel 仍打印）。
 - [Minor→已修] `--latest` 测试断言 `addEntry.Version=="2.0"`（新版入库，旧版由 library.Store 多版本语义保留）。
 - [Minor/决议] downloadToLibrary **复用** app_download.go 的 handleDownloadError/license/token（非重写，非破坏——git diff app_download.go 空，app_download_test 全绿 NFR-07 证据）。
+
+### T4（已 complete）
+- [Minor→已修] Spock Important 1 已修：downloadToLibrary 成功打印 `✓ Downloaded: ...`（AC-03-1 下载+安装两步可见）。
 
 ### T3（已 complete）
 - [Minor→已修] Spock Important 1 已修：`--version` 路径仅 `errors.Is(ErrEntryNotFound)` 映射 AC-10-3，其他存储错误→"failed to query library"。

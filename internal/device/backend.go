@@ -48,6 +48,8 @@ type Backend interface {
 type ProxyConn interface {
 	// BrowseUserApps lists user-installed apps (excludes system apps).
 	BrowseUserApps() ([]installationproxy.AppInfo, error)
+	// Uninstall removes an app by bundle-id (operate-stage).
+	Uninstall(bundleID string) error
 	// Close releases the service connection.
 	Close()
 }

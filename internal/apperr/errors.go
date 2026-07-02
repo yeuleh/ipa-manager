@@ -48,4 +48,8 @@ var (
 	// ErrMultipleDevices indicates more than one device is connected and none
 	// was selected via --udid (and interactive selection is unavailable).
 	ErrMultipleDevices = errors.New("multiple devices connected")
+
+	// ErrAppNotInstalled indicates an uninstall was attempted for a bundle-id
+	// that is not installed on the device (operate-stage; never a tunnel issue).
+	ErrAppNotInstalled = errors.New("app not installed on device")
 )

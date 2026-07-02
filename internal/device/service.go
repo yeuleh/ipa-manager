@@ -8,8 +8,11 @@ package device
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/danielpaulus/go-ios/ios"
+
+	"github.com/yeuleh/ipa-manager/internal/apperr"
 )
 
 // DeviceInfo is our device summary (no go-ios types leak to the CLI).
@@ -37,6 +40,10 @@ type Service interface {
 	// tunnel, connect-stage fails → ErrTunnelRequired. Operate-stage errors
 	// (device rejects the IPA) surface raw.
 	Install(udid, ipaPath string) error
+	// Uninstall removes an app from a device. Connect-stage failure on iOS 17+
+	// (rare) → ErrTunnelRequired. Operate-stage "not installed" →
+	// apperr.ErrAppNotInstalled; other operate errors surface raw.
+	Uninstall(udid, bundleID string) error
 }
 
 // NewService constructs a Service backed by the given Backend.
@@ -137,4 +144,38 @@ func (s *backendService) Install(udid, ipaPath string) error {
 	}
 	defer conn.Close()
 	return conn.SendFile(ipaPath) // operate-stage → raw (never misjudged as tunnel)
+}
+
+// Uninstall implements Service.Uninstall.
+func (s *backendService) Uninstall(udid, bundleID string) error {
+	entry, _, version, err := s.resolveEntry(udid)
+	if err != nil {
+		return err
+	}
+	conn, err := s.backend.OpenInstallationProxy(entry) // connect-stage
+	if err != nil {
+		return diagnoseConnectError(err, version) // iOS≥17 paired → ErrTunnelRequired; else raw
+	}
+	defer conn.Close()
+	if err := conn.Uninstall(bundleID); err != nil {
+		// operate-stage: never tunnel. Map "not installed" → ErrAppNotInstalled
+		// (exact pattern confirmed live at validate; heuristics cover common forms).
+		if isNotInstalledErr(err) {
+			return apperr.ErrAppNotInstalled
+		}
+		return err
+	}
+	return nil
+}
+
+// isNotInstalledErr reports whether a go-ios uninstall error indicates the
+// bundle is not installed on the device. go-ios returns a generic error here
+// (no exported sentinel), so a heuristic is used. The exact pattern is
+// confirmed against a real device at validate; this covers common forms.
+func isNotInstalledErr(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not installed") ||
+		strings.Contains(msg, "no such app") ||
+		strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "does not exist")
 }
