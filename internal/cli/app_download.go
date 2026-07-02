@@ -77,6 +77,10 @@ func runDownload(deps Deps, cmd *cobra.Command, bundleID, profileFlag, outputFla
 	} else {
 		// Pass library directory to ipatool — it generates filename with actual version
 		outputPath = filepath.Join(deps.ConfigRoot, "library", profile.ID) + "/"
+		// Ensure the library directory exists (ipatool doesn't create dirs)
+		if err := os.MkdirAll(outputPath, 0o700); err != nil {
+			return fmt.Errorf("failed to create library directory: %w", err)
+		}
 	}
 
 	// 6. Skip check (AC-02-5: physical file existence)
