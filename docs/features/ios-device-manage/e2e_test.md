@@ -160,7 +160,7 @@
 |----|------|------|
 | E2E-110 | US-02/03 闭环 | 真机：`device install <新 bid>`（library 无）→ 自动下载 → 推送 → `device apps` 见到 |
 | E2E-111 | US-04 | 真机：`device uninstall <bid>` → `device apps` 不再见到 |
-| E2E-112 | US-07 | iOS 17+ 真机未启 tunnel：install/apps 报 tunnel 提示；启 tunnel 后 install 成功 |
+| E2E-112 | US-07 | iOS 17+ 真机：① 未启 tunnel → `device install` 报 tunnel 提示（AC-07-2）；② 启 `sudo ios tunnel start` 后重试 install → LookupTunnelInfo 复用 → 成功（DD-02 闭环）；③ `device apps`/`uninstall` 观察是否需 tunnel（AC-07-3 适用性定论——若成功则 regress requirements 收窄） |
 | E2E-113 | US-06 | 2 台真机连接：`device install` 交互选设备；`--udid` 指定 |
 
 ## 4. Traceability Matrix（E2E ↔ US ↔ AC）

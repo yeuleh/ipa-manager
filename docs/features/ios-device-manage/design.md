@@ -174,6 +174,19 @@ func (s *backendService) Install(udid, ipaPath string) error {
     defer conn.Close()
     return conn.SendFile(ipaPath) // 操作阶段 → 原样上浮（绝不误判 tunnel）
 }
+
+// resolveEntry 解析设备 entry + best-effort lockdown 信息。
+// GetDeviceEntry 失败为硬错误（直接返回 err）；GetLockdownInfo 失败为 best-effort（name/version=""，不致命）。
+func (s *backendService) resolveEntry(udid string) (entry ios.DeviceEntry, name, version string, err error) {
+    entry, err = s.backend.GetDeviceEntry(udid)
+    if err != nil { return entry, "", "", err }
+    name, version, _ = s.backend.GetLockdownInfo(entry) // best-effort；失败留空
+    return entry, name, version, nil
+}
+
+// withRsdProvider 把 tunnel info 注入 DeviceEntry（参考 go-ios cli_device_resolution.go deviceWithRsdProvider）。
+// 复制原 entry 字段 + 设置 Rsd provider（address+rsdPort）；不复制 UserspaceTUN（本工具不做 userspace tunnel）。
+func withRsdProvider(entry ios.DeviceEntry, udid, address string, rsdPort int) ios.DeviceEntry
 ```
 
 **为何稳健（满足 Spock #1/#3/#8）**：
@@ -318,7 +331,7 @@ type Deps struct {
 | `apperr.ErrAppNotInstalled` | sentinel（新） | uninstall 未装（AC-04-3）；device.Service 从 go-ios generic error 识别（执行期经 live 确认匹配模式，见下） |
 
 **ErrAppNotInstalled / trust 错误识别（Spock #6）**：go-ios 的 `installationproxy.Uninstall` 与 trust 错误是 generic error（无导出 sentinel）。
-- **ErrAppNotInstalled**：device.Service.Uninstall 调 `Backend.UninstallApp`；若返回错误且字符串含 "not installed"/"no such app"（执行期 live 确认确切模式）→ 包装 `ErrAppNotInstalled`；否则原样上浮。备选更稳方案：uninstall 前先 `BrowseUserApps` 确认存在（多一次往返但可靠）——执行期权衡，design 倾向错误字符串匹配（少一次往返），live 验证不准则改 pre-check。
+- **ErrAppNotInstalled**：device.Service.Uninstall 在 operate 阶段调 `conn.Uninstall(bundleID)`；若返回错误且字符串含 "not installed"/"no such app"（执行期 live 确认确切模式）→ 包装 `ErrAppNotInstalled`；否则原样上浮。备选更稳方案：uninstall 前先 `conn.BrowseUserApps()` 确认存在（多一次往返但可靠）——执行期权衡，design 倾向错误字符串匹配（少一次往返），live 验证不准则改 pre-check。
 - **trust 错误**：device.Service 原样上浮 go-ios 错误；CLI 层 heuristic（字符串含 "pair"/"trust"/"not paired"）追加 `"trust this Mac on the device"` 提示（AC-02-7）。trust 错误变体多，heuristic 足够（非 tunnel，不影响 DD-02 的 iOS 17+ 定向）。
 
 ### 3.2 状态与持久化
