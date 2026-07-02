@@ -12,6 +12,8 @@ import (
 	"github.com/danielpaulus/go-ios/ios/installationproxy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/yeuleh/ipa-manager/internal/apperr"
 )
 
 // mockBackend is a test Backend. It returns canned device entries and a
@@ -46,13 +48,21 @@ type tunnelLookupMock struct {
 
 // mockProxyConn implements ProxyConn for tests.
 type mockProxyConn struct {
-	apps      []installationproxy.AppInfo
-	browseErr error
-	closed    bool
+	apps            []installationproxy.AppInfo
+	browseErr       error
+	closed          bool
+	uninstallErr    error
+	uninstallCalled bool
+	uninstallBundle string
 }
 
 func (c *mockProxyConn) BrowseUserApps() ([]installationproxy.AppInfo, error) {
 	return c.apps, c.browseErr
+}
+func (c *mockProxyConn) Uninstall(bundleID string) error {
+	c.uninstallCalled = true
+	c.uninstallBundle = bundleID
+	return c.uninstallErr
 }
 func (c *mockProxyConn) Close() { c.closed = true }
 
@@ -494,4 +504,64 @@ func splitTestURL(t *testing.T, url string) (host, port string) {
 	host, port, ok := strings.Cut(u, ":")
 	require.True(t, ok, "test url must have a port")
 	return host, port
+}
+
+// =============================================================================
+// Uninstall (AC-04-3; DD-02 connect/operate layering)
+// =============================================================================
+
+func TestUninstall_Happy(t *testing.T) {
+	conn := &mockProxyConn{}
+	backend := &mockBackend{
+		entries:   []ios.DeviceEntry{entry("u1", "USB")},
+		lockdown:  map[string]lockdownResult{"u1": {name: "iPhone", version: "16.0"}},
+		openProxy: installationProxyMock{conn: conn},
+	}
+	svc := NewService(backend)
+
+	err := svc.Uninstall("u1", "com.x")
+	require.NoError(t, err)
+	assert.True(t, conn.uninstallCalled)
+	assert.Equal(t, "com.x", conn.uninstallBundle)
+	assert.True(t, conn.closed)
+}
+
+func TestUninstall_NotInstalled_ErrAppNotInstalled(t *testing.T) {
+	conn := &mockProxyConn{uninstallErr: newErr("app not installed on device")}
+	backend := &mockBackend{
+		entries:   []ios.DeviceEntry{entry("u1", "USB")},
+		lockdown:  map[string]lockdownResult{"u1": {name: "iPhone", version: "17.5"}},
+		openProxy: installationProxyMock{conn: conn},
+	}
+	svc := NewService(backend)
+
+	err := svc.Uninstall("u1", "com.x")
+	require.ErrorIs(t, err, apperr.ErrAppNotInstalled, "operate 'not installed' → ErrAppNotInstalled")
+}
+
+func TestUninstall_ConnectFail_iOS17_Tunnel(t *testing.T) {
+	backend := &mockBackend{
+		entries:   []ios.DeviceEntry{entry("u1", "USB")},
+		lockdown:  map[string]lockdownResult{"u1": {name: "iPhone", version: "17.5"}},
+		openProxy: installationProxyMock{err: errConnectFailed},
+	}
+	svc := NewService(backend)
+
+	err := svc.Uninstall("u1", "com.x")
+	require.ErrorIs(t, err, ErrTunnelRequired)
+}
+
+func TestUninstall_OperateOtherError_RawNotTunnel(t *testing.T) {
+	conn := &mockProxyConn{uninstallErr: newErr("some device error")}
+	backend := &mockBackend{
+		entries:   []ios.DeviceEntry{entry("u1", "USB")},
+		lockdown:  map[string]lockdownResult{"u1": {name: "iPhone", version: "17.5"}},
+		openProxy: installationProxyMock{conn: conn},
+	}
+	svc := NewService(backend)
+
+	err := svc.Uninstall("u1", "com.x")
+	require.NotErrorIs(t, err, ErrTunnelRequired, "operate error never tunnel")
+	require.NotErrorIs(t, err, apperr.ErrAppNotInstalled, "non-not-installed error is raw")
+	assert.Contains(t, err.Error(), "some device error")
 }

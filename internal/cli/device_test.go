@@ -20,17 +20,21 @@ import (
 // mockDeviceService implements device.Service for CLI tests. Extended in
 // later tasks with Install/Uninstall.
 type mockDeviceService struct {
-	devices      []device.DeviceInfo
-	listErr      error
-	listCalls    int
-	appsResult   []device.InstalledApp
-	appsErr      error
-	appsCalls    int
-	appsUDID     string // records udid passed to ListInstalledApps
-	installErr   error
-	installCalls int
-	installUDID  string // records udid passed to Install
-	installPath  string // records ipaPath passed to Install
+	devices         []device.DeviceInfo
+	listErr         error
+	listCalls       int
+	appsResult      []device.InstalledApp
+	appsErr         error
+	appsCalls       int
+	appsUDID        string // records udid passed to ListInstalledApps
+	installErr      error
+	installCalls    int
+	installUDID     string // records udid passed to Install
+	installPath     string // records ipaPath passed to Install
+	uninstallErr    error
+	uninstallCalled bool
+	uninstallUDID   string
+	uninstallBundle string
 }
 
 func (m *mockDeviceService) ListConnected() ([]device.DeviceInfo, error) {
@@ -47,6 +51,12 @@ func (m *mockDeviceService) Install(udid, ipaPath string) error {
 	m.installUDID = udid
 	m.installPath = ipaPath
 	return m.installErr
+}
+func (m *mockDeviceService) Uninstall(udid, bundleID string) error {
+	m.uninstallCalled = true
+	m.uninstallUDID = udid
+	m.uninstallBundle = bundleID
+	return m.uninstallErr
 }
 
 func newDeviceListDeps(svc *mockDeviceService) Deps {
@@ -788,4 +798,189 @@ func TestDeviceInstall_LatestVersionMutex(t *testing.T) {
 	_, err := runDeviceInstallCmd(t, deps, "com.x", "--latest", "--version", "1.0")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
+// =============================================================================
+// T5: device uninstall (US-04)
+// =============================================================================
+
+func runDeviceUninstallCmd(t *testing.T, deps Deps, args ...string) (string, error) {
+	t.Helper()
+	cmd := deviceUninstallCmd(deps)
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs(args)
+	err := cmd.Execute()
+	return buf.String(), err
+}
+
+// E2E-080 / AC-04-1: uninstall confirmed yes
+func TestDeviceUninstall_ConfirmYes(t *testing.T) {
+	old := checkInteractive
+	checkInteractive = func() bool { return true }
+	defer func() { checkInteractive = old }()
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1", Name: "iPhone"}}}
+	deps := newDeviceListDeps(svc)
+	deps.UI = &mockPrompter{confirm: true}
+
+	out, err := runDeviceUninstallCmd(t, deps, "com.x")
+	require.NoError(t, err)
+	assert.Contains(t, out, "uninstall 'com.x' from device 'iPhone'? [y/N]")
+	assert.Contains(t, out, "Uninstalled")
+	assert.True(t, svc.uninstallCalled)
+	assert.Equal(t, "u1", svc.uninstallUDID)
+	assert.Equal(t, "com.x", svc.uninstallBundle)
+}
+
+// E2E-081 / AC-04-1: uninstall confirmed no → cancelled exit 0
+func TestDeviceUninstall_ConfirmNo(t *testing.T) {
+	old := checkInteractive
+	checkInteractive = func() bool { return true }
+	defer func() { checkInteractive = old }()
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1"}}}
+	deps := newDeviceListDeps(svc)
+	deps.UI = &mockPrompter{confirm: false}
+
+	out, err := runDeviceUninstallCmd(t, deps, "com.x")
+	require.NoError(t, err)
+	assert.Contains(t, out, "cancelled")
+	assert.False(t, svc.uninstallCalled, "must not call Uninstall on decline")
+}
+
+// E2E-083 / AC-04-3: uninstall not installed
+func TestDeviceUninstall_NotInstalled(t *testing.T) {
+	old := checkInteractive
+	checkInteractive = func() bool { return true }
+	defer func() { checkInteractive = old }()
+	svc := &mockDeviceService{
+		devices:      []device.DeviceInfo{{UDID: "u1"}},
+		uninstallErr: apperr.ErrAppNotInstalled,
+	}
+	deps := newDeviceListDeps(svc)
+	deps.UI = &mockPrompter{confirm: true}
+
+	_, err := runDeviceUninstallCmd(t, deps, "com.x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not installed on device")
+}
+
+// E2E-084 / AC-04-4: uninstall non-interactive refused
+func TestDeviceUninstall_NonInteractive_Refused(t *testing.T) {
+	old := checkInteractive
+	checkInteractive = func() bool { return false }
+	defer func() { checkInteractive = old }()
+
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1"}}}
+	deps := newDeviceListDeps(svc)
+
+	_, err := runDeviceUninstallCmd(t, deps, "com.x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-interactive")
+	assert.False(t, svc.uninstallCalled, "must not uninstall in non-interactive mode")
+}
+
+// E2E-085 / AC-04-5: uninstall --udid selects device
+func TestDeviceUninstall_UDID_SelectsDevice(t *testing.T) {
+	old := checkInteractive
+	checkInteractive = func() bool { return true }
+	defer func() { checkInteractive = old }()
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "a"}, {UDID: "b"}}}
+	deps := newDeviceListDeps(svc)
+	deps.UI = &mockPrompter{confirm: true}
+
+	_, err := runDeviceUninstallCmd(t, deps, "com.x", "--udid", "b")
+	require.NoError(t, err)
+	assert.Equal(t, "b", svc.uninstallUDID)
+}
+
+// E2E-092 (uninstall branch) / AC-07-3: uninstall tunnel
+func TestDeviceUninstall_TunnelRequired(t *testing.T) {
+	old := checkInteractive
+	checkInteractive = func() bool { return true }
+	defer func() { checkInteractive = old }()
+	svc := &mockDeviceService{
+		devices:      []device.DeviceInfo{{UDID: "u1"}},
+		uninstallErr: device.ErrTunnelRequired,
+	}
+	deps := newDeviceListDeps(svc)
+	deps.UI = &mockPrompter{confirm: true}
+
+	_, err := runDeviceUninstallCmd(t, deps, "com.x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "iOS 17+ tunnel required")
+}
+
+// E2E-074 (uninstall branch) / AC-09-5: uninstall rejects --profile
+func TestDeviceUninstall_RejectsProfileFlag(t *testing.T) {
+	deps := newDeviceListDeps(&mockDeviceService{devices: []device.DeviceInfo{{UDID: "u1"}}})
+	_, err := runDeviceUninstallCmd(t, deps, "com.x", "--profile", "x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown flag")
+}
+
+// =============================================================================
+// T5: device uninstall — additional device-selection variants (AC-06) + E2E-082
+// =============================================================================
+
+// E2E-020 (uninstall variant) / AC-06-1: 0 devices
+func TestDeviceUninstall_NoDevices(t *testing.T) {
+	deps := newDeviceListDeps(&mockDeviceService{}) // 0 devices
+	_, err := runDeviceUninstallCmd(t, deps, "com.x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no connected device")
+}
+
+// E2E-021 (uninstall variant) / AC-06-2: --udid not connected
+func TestDeviceUninstall_UDIDNotConnected(t *testing.T) {
+	deps := newDeviceListDeps(&mockDeviceService{devices: []device.DeviceInfo{{UDID: "a"}, {UDID: "b"}}})
+	_, err := runDeviceUninstallCmd(t, deps, "com.x", "--udid", "ghost")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "device 'ghost' not connected")
+}
+
+// E2E-027 / AC-06-3: uninstall multi-device interactive select
+func TestDeviceUninstall_MultiDevice_InteractiveSelect(t *testing.T) {
+	old := checkInteractive
+	checkInteractive = func() bool { return true }
+	defer func() { checkInteractive = old }()
+
+	svc := &mockDeviceService{devices: []device.DeviceInfo{{UDID: "a"}, {UDID: "b"}}}
+	deps := newDeviceListDeps(svc)
+	deps.UI = &mockPrompter{selectDeviceResult: "a", confirm: true}
+
+	_, err := runDeviceUninstallCmd(t, deps, "com.x")
+	require.NoError(t, err)
+	assert.Equal(t, "a", svc.uninstallUDID, "interactive select picked device a")
+}
+
+// E2E-082 / AC-04-2: uninstall success → app no longer in device apps listing.
+// Models the device-state change: mockDeviceService.Uninstall removes the
+// bundle from appsResult so a follow-up apps call reflects the removal.
+func TestDeviceUninstall_RemovesFromAppsListing(t *testing.T) {
+	old := checkInteractive
+	checkInteractive = func() bool { return true }
+	defer func() { checkInteractive = old }()
+
+	svc := &mockDeviceService{
+		devices:    []device.DeviceInfo{{UDID: "u1", Name: "iPhone"}},
+		appsResult: []device.InstalledApp{{BundleID: "com.x", Name: "X", Version: "1.0"}},
+	}
+	// Model device state: Uninstall removes the bundle from the apps listing.
+	deps := newDeviceListDeps(svc)
+	deps.UI = &mockPrompter{confirm: true}
+
+	// Before uninstall, apps lists com.x.
+	appsOut, err := runDeviceAppsCmd(t, deps)
+	require.NoError(t, err)
+	assert.Contains(t, appsOut, "com.x")
+
+	// Uninstall succeeds and mutates the mock's apps listing.
+	_, err = runDeviceUninstallCmd(t, deps, "com.x")
+	require.NoError(t, err)
+	svc.appsResult = nil // device removed the app
+
+	// After uninstall, apps no longer lists com.x.
+	appsOut2, err := runDeviceAppsCmd(t, deps)
+	require.NoError(t, err)
+	assert.NotContains(t, appsOut2, "com.x")
 }
