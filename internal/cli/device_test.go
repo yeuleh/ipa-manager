@@ -129,7 +129,7 @@ func TestDeviceList_Multiple_AllShown(t *testing.T) {
 }
 
 // =============================================================================
-// E2E-004 / AC-01-1 + AC-07-1: untrusted device still listed (lockdown failed)
+// E2E-004 / AC-01-1: untrusted device still listed (lockdown failed)
 // =============================================================================
 
 func TestDeviceList_LockdownFailed_DeviceStillListed(t *testing.T) {
@@ -149,7 +149,7 @@ func TestDeviceList_LockdownFailed_DeviceStillListed(t *testing.T) {
 }
 
 // =============================================================================
-// E2E-090 / AC-07-1: iOS 17+ device without tunnel is still listed
+// iOS 17+ device is listed like any other (tunnel-agnostic post-amendment)
 // =============================================================================
 
 func TestDeviceList_iOS17Device_StillListed(t *testing.T) {

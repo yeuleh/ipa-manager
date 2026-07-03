@@ -15,32 +15,30 @@ import (
 //	T2: OpenInstallationProxy (+ ProxyConn)
 //	T3: OpenInstaller (+ InstallerConn)
 //	T5: ProxyConn gains Uninstall
-//	(tunnel methods LookupTunnelInfo/WithRsd were removed — see Live Amendment)
+//	(historical: tunnel methods LookupTunnelInfo/WithRsd were removed after
+//	 live testing showed iOS 17+ works over usbmuxd — see Live Amendment)
 type Backend interface {
 	// ListDeviceEntries returns connected devices via usbmuxd (ios.ListDevices).
 	ListDeviceEntries() ([]ios.DeviceEntry, error)
 	// GetDeviceEntry returns the device entry for a UDID (ios.GetDevice).
 	GetDeviceEntry(udid string) (ios.DeviceEntry, error)
 	// GetLockdownInfo returns DeviceName + ProductVersion via lockdown
-	// (ios.GetValues). Used for DeviceInfo enrichment and tunnel diagnosis.
+	// (ios.GetValues). Used for DeviceInfo enrichment (name/version display).
 	GetLockdownInfo(entry ios.DeviceEntry) (name, version string, err error)
 	// OpenInstallationProxy opens the installation_proxy service over usbmuxd
-	// (installationproxy.New). Connect-stage: failure on iOS 17+ (rare, since
-	// installationproxy uses usbmuxd lockdown) is diagnosed by the Service.
+	// (installationproxy.New).
 	OpenInstallationProxy(entry ios.DeviceEntry) (ProxyConn, error)
-	// OpenInstaller opens the zipconduit service for IPA install
-	// (zipconduit.New). Connects over usbmuxd (live-confirmed working on iOS 26
-	// without a tunnel; the earlier iOS-17-tunnel premise was removed).
+	// OpenInstaller opens the zipconduit service for IPA install (zipconduit.New),
+	// over usbmuxd.
 	OpenInstaller(entry ios.DeviceEntry) (InstallerConn, error)
 }
 
 // ProxyConn wraps installationproxy.Connection for the operate stage
 // (BrowseUserApps / Uninstall). Package-internal; go-ios types appear here.
-// T2 implements BrowseUserApps + Close; T5 adds Uninstall.
 type ProxyConn interface {
 	// BrowseUserApps lists user-installed apps (excludes system apps).
 	BrowseUserApps() ([]installationproxy.AppInfo, error)
-	// Uninstall removes an app by bundle-id (operate-stage).
+	// Uninstall removes an app by bundle-id.
 	Uninstall(bundleID string) error
 	// Close releases the service connection.
 	Close()
@@ -49,8 +47,7 @@ type ProxyConn interface {
 // InstallerConn wraps zipconduit.Connection for the operate stage (SendFile).
 // Package-internal; go-ios types appear here.
 type InstallerConn interface {
-	// SendFile pushes a local IPA to the device (operate-stage: errors here are
-	// surfaced raw, never misjudged as tunnel — tunnel is connect-stage only).
+	// SendFile pushes a local IPA to the device.
 	SendFile(ipaPath string) error
 	// Close releases the service connection.
 	Close() error
