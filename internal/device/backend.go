@@ -28,18 +28,9 @@ type Backend interface {
 	// installationproxy uses usbmuxd lockdown) is diagnosed by the Service.
 	OpenInstallationProxy(entry ios.DeviceEntry) (ProxyConn, error)
 	// OpenInstaller opens the zipconduit service for IPA install
-	// (zipconduit.New). Connect-stage: on iOS 17+ without a tunnel this fails
-	// (Apple removed the usbmuxd zipconduit channel); diagnosed by the Service.
+	// (zipconduit.New). Connects over usbmuxd (live-confirmed working on iOS 26
+	// without a tunnel; the earlier iOS-17-tunnel premise was removed).
 	OpenInstaller(entry ios.DeviceEntry) (InstallerConn, error)
-	// LookupTunnelInfo queries a running tunnel agent (read-only HTTP GET to
-	// 127.0.0.1:60105) for the device's tunnel address + RSD port. Returns an
-	// error (e.g. tunnel.ErrTunnelNotFound) when no tunnel is running — no sudo.
-	LookupTunnelInfo(udid string) (address string, rsdPort int, err error)
-	// WithRsd injects the RSD provider (from a running tunnel) into a device
-	// entry so OpenInstaller routes via the shim path. Mirrors go-ios's
-	// deviceWithRsdProvider. Does NOT copy UserspaceTUN (this tool does not run
-	// userspace tunnels).
-	WithRsd(entry ios.DeviceEntry, udid, address string, rsdPort int) (ios.DeviceEntry, error)
 }
 
 // ProxyConn wraps installationproxy.Connection for the operate stage

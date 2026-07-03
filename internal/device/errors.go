@@ -1,8 +1,7 @@
 package device
 
-import "errors"
-
-// ErrTunnelRequired indicates an iOS 17+ device needs a tunnel before device
-// services can be reached. The CLI surfaces this as an actionable message
-// rather than auto-escalating to sudo.
-var ErrTunnelRequired = errors.New("ios 17+ tunnel required; run: sudo ios tunnel start")
+// (Sentinels formerly here — ErrTunnelRequired — were removed after live testing
+// on iOS 26 showed install/apps/uninstall work over usbmuxd WITHOUT a tunnel,
+// invalidating the "iOS 17+ needs tunnel" premise. See docs/features/ios-device-manage
+// design DD-02 history / plan.md ledger. Device-specific error sentinels
+// (ErrAppNotInstalled etc.) live in internal/apperr.)

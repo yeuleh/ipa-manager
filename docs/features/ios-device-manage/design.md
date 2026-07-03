@@ -1,5 +1,16 @@
 # Design — ios-device-manage
 
+> ## ⚠️ LIVE AMENDMENT（execution 阶段 live 实测权威更正）
+>
+> iOS 26 真机实测：`device install`/`apps`/`uninstall` 经 usbmuxd 全部可用，**无需 tunnel**。原"iOS 17+ 必须 tunnel"前提证伪。据此：
+> - **DD-02（iOS 17+ tunnel 分层检测 + tunnel info 复用）整条作废**：`LookupTunnelInfo`/`WithRsd`/`diagnoseConnectError`/`ErrTunnelRequired`/`isIOS17OrLater` 从代码移除；`Service.Install/ListInstalledApps/Uninstall` 简化为 connect（原样错误）+ operate。
+> - `DeviceInfo.NeedsTunnel` 字段移除；`device list` 4 列不变（本就不显示 tunnel）。
+> - §3.1 的 tunnel 类型/哨兵、§5 flows 的 tunnel 分支、§8 决策表的 DD-02 行——**均以此 amendment 为准，视为过时**。
+> - **保留** DD-09（CLI 错误渲染）、DD-01/03/04/05/06/07/08、AC-04-3 的 pre-check（ErrAppNotInstalled）等其余设计。
+> - 单一事实源：[`requirements.md` Live Amendment](./requirements.md)。详见 [plan.md ledger](./plan.md)。
+>
+> 本文以下内容保留作历史记录，但 tunnel 相关部分被上述 amendment 覆盖。
+
 > 配套：[`requirements.md`](./requirements.md)（已验收，单一事实源）｜[`e2e_test.md`](./e2e_test.md)
 
 ## 1. Goals & Non-Goals

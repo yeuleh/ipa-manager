@@ -154,7 +154,7 @@ func TestDeviceList_LockdownFailed_DeviceStillListed(t *testing.T) {
 
 func TestDeviceList_iOS17Device_StillListed(t *testing.T) {
 	svc := &mockDeviceService{devices: []device.DeviceInfo{
-		{UDID: "udid17", Name: "iPhone 16", IOSVersion: "17.5", ConnectionType: "USB", NeedsTunnel: true},
+		{UDID: "udid17", Name: "iPhone 16", IOSVersion: "17.5", ConnectionType: "USB"},
 	}}
 	deps := newDeviceListDeps(svc)
 
@@ -291,20 +291,6 @@ func TestDeviceApps_MultiDevice_NonInteractive_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "--udid")
 	assert.Contains(t, err.Error(), "non-interactive")
 	assert.Equal(t, 0, svc.appsCalls, "must not call ListInstalledApps on selection failure")
-}
-
-// E2E-092 / AC-07-3 (apps tunnel branch): apps returns tunnel error
-func TestDeviceApps_TunnelRequired(t *testing.T) {
-	svc := &mockDeviceService{
-		devices: []device.DeviceInfo{{UDID: "u1"}},
-		appsErr: device.ErrTunnelRequired,
-	}
-	deps := newDeviceListDeps(svc)
-
-	_, err := runDeviceAppsCmd(t, deps)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "iOS 17+ tunnel required")
-	assert.Contains(t, err.Error(), "sudo ios tunnel start")
 }
 
 // E2E-074 (apps branch) / AC-09-5: device apps rejects --profile
@@ -562,22 +548,6 @@ func TestDeviceInstall_Profile_NotFound(t *testing.T) {
 	_, err := runDeviceInstallCmd(t, deps, "com.x", "--profile", "ghost")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "profile 'ghost' not found")
-}
-
-// E2E-091 / AC-07-2: install tunnel required
-func TestDeviceInstall_TunnelRequired(t *testing.T) {
-	store := helperDownloadStore()
-	svc := &mockDeviceService{
-		devices:    []device.DeviceInfo{{UDID: "u1"}},
-		installErr: device.ErrTunnelRequired,
-	}
-	lib := &mockLibraryStore{entries: []library.Entry{ipaEntry("com.x", "1.0", "/x.ipa", 1)}}
-	deps := helperDeviceInstallDeps(store, svc, lib)
-
-	_, err := runDeviceInstallCmd(t, deps, "com.x")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "iOS 17+ tunnel required")
-	assert.Contains(t, err.Error(), "sudo ios tunnel start")
 }
 
 // E2E-032 / AC-02-7: install trust failure → hint
@@ -892,23 +862,6 @@ func TestDeviceUninstall_UDID_SelectsDevice(t *testing.T) {
 	_, err := runDeviceUninstallCmd(t, deps, "com.x", "--udid", "b")
 	require.NoError(t, err)
 	assert.Equal(t, "b", svc.uninstallUDID)
-}
-
-// E2E-092 (uninstall branch) / AC-07-3: uninstall tunnel
-func TestDeviceUninstall_TunnelRequired(t *testing.T) {
-	old := checkInteractive
-	checkInteractive = func() bool { return true }
-	defer func() { checkInteractive = old }()
-	svc := &mockDeviceService{
-		devices:      []device.DeviceInfo{{UDID: "u1"}},
-		uninstallErr: device.ErrTunnelRequired,
-	}
-	deps := newDeviceListDeps(svc)
-	deps.UI = &mockPrompter{confirm: true}
-
-	_, err := runDeviceUninstallCmd(t, deps, "com.x")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "iOS 17+ tunnel required")
 }
 
 // E2E-074 (uninstall branch) / AC-09-5: uninstall rejects --profile

@@ -264,3 +264,12 @@ T5 (device uninstall + 确认 + ErrAppNotInstalled)       ←─ 创建 uninstal
 ### T2（已 complete）
 - [Minor] `ErrDeviceNotConnected` 哨兵未在 `--udid` 未连分支 `%w` 包装（当前用 `fmt.Errorf("device '%s' not connected")` 纯消息）。无 `errors.Is` 依赖，AC 不受影响；若未来需 `errors.Is` 可加包装。
 - [Minor] "connect 失败→Browse 未调"oracle 目前由代码早返回+nil conn 间接保证；可加显式 `browseCalled` 计数断言提升可证明性。
+
+### execution 期 live 发现（重大）：iOS 17+ tunnel 前提证伪 → 移除 tunnel 机器
+- **发现**：用户在 iOS 26 真机（iPhone）实测 `device install com.starbuckschina.mystarbucksmoments` **未起 tunnel 即成功**——go-ios zipconduit 经 usbmuxd 完整跑通（CreatingStagingDirectory→…→InstallComplete），日志无 tunnel/rsd。结合 risk 1（apps 无 tunnel 可用），**"iOS 17+ 必须 tunnel"前提（源自 research.md 旧信息）证伪**。
+- **用户决策**：路线 X（基于实证简化，符合最小成本）。
+- **代码移除**：删 `internal/device/tunnel.go`（isIOS17OrLater/diagnoseConnectError）、`tunnel_test.go`；`DeviceInfo.NeedsTunnel` 字段移除；`Backend` 删 `LookupTunnelInfo`/`WithRsd`；`backend_impl` 删对应 impl + HTTP 重实现；`Service.Install/ListInstalledApps/Uninstall` 简化为 connect(原样错误)+operate；`ErrTunnelRequired` 删；CLI 三命令删 tunnel 分支；测试删 tunnel case（apps/install/uninstall TunnelRequired + connect-fail-tunnel + LookupTunnelInfo httptest + tunnel-reuse）改为 raw-error 断言。
+- **Spec 回归**：requirements 加 Live Amendment（US-07/AC-07-2/3/4 + NFR-01 移除；"不自动 sudo"保留为 NFR-03 通用约束）；design DD-02 作废（amendment 覆盖）；e2e_test iOS17+ tunnel 节作废。
+- **保留**：AC-01-1（list 4 列）、AC-04-3（pre-check ErrAppNotInstalled）、DD-09（错误渲染）、其余设计。
+- **教训（强化前述）**：research.md 的"iOS 17+ 需 tunnel"是过时文献结论；**实证 > 文献**。这是本 mission 第三次因假设被打脸（uninstall 幂等、错误渲染、tunnel 前提）——validate/live 阶段对"基于文献的前提"必须实测确认。
+- **回归守护**：移除后 `go test ./...` 全绿；二进制重建，用户需再装一次确认 install 仍工作（证明删 tunnel 机器未破坏功能）。
