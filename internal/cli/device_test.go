@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -1052,4 +1053,38 @@ func TestDeviceInstall_ThenAppsShowsIt(t *testing.T) {
 	after, err := runDeviceAppsCmd(t, deps)
 	require.NoError(t, err)
 	assert.Contains(t, after, "com.x")
+}
+
+// =============================================================================
+// DD-09: CLI error rendering — Usage only on format errors, single print
+// (goes through the production execute() wrapper, captures stdout/stderr
+// separately — closes the prior blind spot of asserting only return-value and
+// bypassing the wrapper where the duplicate-print regression lived)
+// =============================================================================
+
+// operational error (RunE) → message exactly once, NO Usage — via the real
+// execute() wrapper (proves the wrapper does not double-print after cobra).
+func TestExecute_OperationalError_NoUsageSinglePrint(t *testing.T) {
+	depsFn := func() (Deps, error) { return newDeviceListDeps(&mockDeviceService{}), nil } // 0 devices
+	var out, errOut bytes.Buffer
+	code := execute("test", []string{"device", "apps"}, depsFn, &out, &errOut)
+
+	require.Equal(t, 1, code)
+	combined := out.String() + errOut.String()
+	assert.Contains(t, combined, "no connected device", "operational error message present")
+	assert.NotContains(t, combined, "Usage:", "operational error must NOT print Usage (DD-09)")
+	assert.Equal(t, 1, strings.Count(combined, "no connected device"),
+		"message printed exactly once — wrapper does not double-print (DD-09 regression guard)")
+}
+
+// format error (unknown flag) → message + Usage (helps user correct command)
+func TestExecute_FormatError_ShowsUsage(t *testing.T) {
+	depsFn := func() (Deps, error) { return newDeviceListDeps(&mockDeviceService{}), nil }
+	var out, errOut bytes.Buffer
+	code := execute("test", []string{"device", "apps", "--badflag"}, depsFn, &out, &errOut)
+
+	require.Equal(t, 1, code)
+	combined := out.String() + errOut.String()
+	assert.Contains(t, combined, "unknown flag", "flag error message present")
+	assert.Contains(t, combined, "Usage:", "format error MUST show Usage (DD-09)")
 }

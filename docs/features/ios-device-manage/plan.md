@@ -236,6 +236,16 @@ T5 (device uninstall + 确认 + ErrAppNotInstalled)       ←─ 创建 uninstal
 ### execution 整体评审修复（Spock PASS-WITH-FIXES → 已修，转 PASS）
 - [Important→已修] AC-03-6 文案对齐：`apperr.ErrDownloadNonInteractive` 文本改为 "license acquisition requires interactive confirmation"，使 auto-download 非交互 license 错误产出 AC-03-6 精确文案（同时改进 download mission AC-02-11 合规；app_download_test 不 assert 旧文本，全绿 NFR-07）。
 - [Important→已修] install 设备选择变体直接 CLI 覆盖：`TestDeviceInstall_NoDevices`（AC-06-1）、`_UDIDNotConnected`（AC-06-2）、`_MultiDevice_InteractiveSelect`（AC-06-3）、`_ThenAppsShowsIt`（E2E-031 stateful：install 后 apps 可见）。
+
+### execution 期 live 发现的 DD-09（CLI 错误渲染）+ review 流程教训
+- **缺陷**：操作错误（RunE）显示完整 Usage 块 + 消息双打（cobra 默认 SilenceUsage=false + root.go 重复 Fprintln）。cobra 公认反模式。
+- **根因（四层）**：① spec 缺口（NFR-04/10 只规定错误内容，未规定渲染格式）；② execution 缺陷（继承脚手架默认，未应用"Usage 仅格式错误显示"的 CLI 惯例）；③ review 太 spec-literal（Spock 只对照写下的条款，未把通用 CLI 惯例当 code-quality 判据——**即便 spec 沉默，操作错误带 Usage 也应被 flag 为 Important**）；④ test 三重盲区（只断言返回值、不经生产 Execute wrapper、不捕获 stderr 渲染）。
+- **修复（DD-09）**：design 补 DD-09；root.go `PersistentPreRunE` 设 `cmd.SilenceUsage=true`（利用 cobra 执行序：flag 错误在 hook 前仍显 Usage，操作错误在 hook 后不显）；移除 root.go 重复打印；**抽出 `execute(version,args,depsFn,out,errOut) int` 可测 wrapper**；新增经 wrapper、分捕 stdout/stderr 的测试（操作错误→恰好一次+无 Usage；格式错误→有 Usage）。
+- **教训（记入供后续 mission）**：
+  1. **review 不能只 spec-literal**——通用平台/框架惯例（如 cobra 的 Usage 反模式）是 code-quality 的固有判据，spec 沉默不免责。
+  2. **CLI 错误渲染须三维度验证**：消息内容 + 是否带 Usage + 打印次数（stdout/stderr 分捕）。
+  3. **生产入口（`Execute`）要可测**——抽出返回 exit code 的核心函数，避免 os.Exit 阻断测试。
+  4. **live 彩排不可替代**——mock 测试断言行为/数据，不断言终端渲染；validate 阶段真机跑是发现此类"渲染"缺陷的唯一途径。
 - [Minor→已修] Spock Important 1 已修：downloadToLibrary 成功打印 `✓ Downloaded: ...`（AC-03-1 下载+安装两步可见）。
 - [Minor→已修] Spock Important 2 已修：`--latest` 的 LibraryStore.Get 错误不再忽略（surface "failed to query library"）。
 - [Minor→已修] license decline 不再重复打印 `cancelled`（handleLicenseRequired 已打印；runDeviceInstall 的 IPA-source cancel 分支不重打印；device-select cancel 仍打印）。

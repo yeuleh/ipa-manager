@@ -3,6 +3,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -10,17 +11,30 @@ import (
 
 // Execute builds and runs the root command with production dependencies.
 func Execute(version string) {
-	deps, err := newProductionDeps()
+	os.Exit(execute(version, os.Args[1:], newProductionDeps, os.Stdout, os.Stderr))
+}
+
+// execute is the testable core of Execute. It returns the exit code instead of
+// calling os.Exit, and accepts injectable args / deps / writers so the wrapper-
+// level error rendering (DD-09: cobra prints "Error: <msg>" once, execute must
+// NOT print again) can be regression-tested.
+func execute(version string, args []string, depsFn func() (Deps, error), out, errOut io.Writer) int {
+	deps, err := depsFn()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		fmt.Fprintln(errOut, err)
+		return 1
 	}
 	root := newRootCmd(deps)
 	root.Version = version
+	root.SetOut(out)
+	root.SetErr(errOut)
+	root.SetArgs(args)
+	// cobra already prints "Error: <msg>" (SilenceErrors=false); do NOT print
+	// again (design DD-09: single clean line, no duplicate).
 	if err := root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func newRootCmd(deps Deps) *cobra.Command {
@@ -31,6 +45,13 @@ func newRootCmd(deps Deps) *cobra.Command {
 			"download/isolation, and push-to-device install/update.\n\n" +
 			"Account credentials are stored per-profile in the macOS Keychain " +
 			"(via ipatool's keyring); device operations use go-ios.",
+		// DD-09: operational (RunE) errors must not print Usage (cobra anti-pattern).
+		// Flag/arg parse errors happen BEFORE this hook runs, so they still show
+		// Usage; RunE errors (after the hook) get SilenceUsage=true → no Usage.
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			return nil
+		},
 	}
 	root.AddCommand(
 		authCmd(deps),
