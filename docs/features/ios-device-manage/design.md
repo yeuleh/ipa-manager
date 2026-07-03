@@ -311,6 +311,21 @@ type Deps struct {
 
 `newProductionDeps` 增加 `DeviceService: device.NewService(device.NewDefaultBackend())`。
 
+#### DD-09 — CLI 错误渲染策略（execution 期 live 发现，补全 spec 缺口）
+
+**背景**：live 测发现操作错误（如 `device uninstall` 未装）输出重复消息 + 完整 Usage 块——cobra 默认 `SilenceUsage=false`+`SilenceErrors=false`，且 `root.go` 在 cobra 已打印后又打印一次。这是 cobra 应用公认反模式（操作错误带 Usage 是噪声），脚手架继承未纠正。原 requirements NFR-04/10 只规定错误**内容**（cause+suggestion、风格统一），未规定**渲染格式**——属 spec 缺口；execution 亦未应用通用 CLI 惯例（review 漏判，见 plan.md ledger）。
+
+**策略**：
+- **操作错误（RunE 返回 error）**：仅 cobra 打印一行 `"Error: <msg>"` 到 stderr，**不显示 Usage**。
+- **格式错误（flag/arg 解析失败）**：显示 `"Error: <msg>"` + Usage（帮用户纠正命令）。
+- **不重复打印**：cobra 已打印，`root.Execute()` 不再二次 `Fprintln`。
+
+**实现**：root 的 `PersistentPreRunE` 设 `cmd.SilenceUsage = true`（cmd 为被执行的叶子命令）。cobra 执行序：`ParseFlags`/`ValidateArgs`（失败在此返回，SilenceUsage 仍 false → 显示 Usage）→ `PersistentPreRunE`（设 SilenceUsage=true）→ `RunE`（操作错误此时 SilenceUsage 已 true → 不显示 Usage）。`root.go` 移除 `fmt.Fprintln(os.Stderr, err)` 重复打印（保留 `os.Exit(1)`）。
+
+**为何不用 `SilenceErrors`**：保留 cobra 的 `"Error: "` 前缀输出（标准、清晰），只去 Usage 与重复。
+
+**验证**：新增经生产 `execute()` wrapper（非 `newRootCmd().Execute()` 直调）、分别捕获 stdout/stderr 的测试（堵住之前 test 只断言返回值、不经 wrapper、盲于 stderr 的三重盲区）：操作错误→消息恰好一次 + 无 Usage；格式错误→有 Usage。wrapper 抽出为 `execute(version, args, depsFn, out, errOut) int` 以可测（`Execute` 仅 `os.Exit(execute(...))`）。
+
 ## 3. Data Models, State & Interfaces
 
 ### 3.1 新增/修改类型
