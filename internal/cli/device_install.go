@@ -14,7 +14,6 @@ import (
 	"github.com/yeuleh/ipa-manager/internal/account"
 	"github.com/yeuleh/ipa-manager/internal/apperr"
 	"github.com/yeuleh/ipa-manager/internal/appstore"
-	"github.com/yeuleh/ipa-manager/internal/device"
 	"github.com/yeuleh/ipa-manager/internal/library"
 )
 
@@ -74,12 +73,9 @@ func runDeviceInstall(deps Deps, out io.Writer,
 		return err
 	}
 
-	// 4. Push (AC-02-9: always push; AC-07-2: iOS 17+ tunnel).
+	// 4. Push (AC-02-9: always push; device-side accept/reject surfaces raw).
 	if err := deps.DeviceService.Install(dev.UDID, entry.FilePath); err != nil {
-		if errors.Is(err, device.ErrTunnelRequired) {
-			return fmt.Errorf("iOS 17+ tunnel required; run: sudo ios tunnel start")
-		}
-		return withTrustHint(err) // AC-02-7
+		return withTrustHint(err) // AC-02-7: trust/pair failure heuristic
 	}
 
 	// 5. Report.

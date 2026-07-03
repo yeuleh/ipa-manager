@@ -7,7 +7,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/yeuleh/ipa-manager/internal/apperr"
-	"github.com/yeuleh/ipa-manager/internal/device"
 )
 
 // deviceCmd is the unified device command group (replaces the old top-level
@@ -98,9 +97,6 @@ func deviceUninstallCmd(deps Deps) *cobra.Command {
 			}
 
 			if err := deps.DeviceService.Uninstall(dev.UDID, bundleID); err != nil {
-				if errors.Is(err, device.ErrTunnelRequired) {
-					return fmt.Errorf("iOS 17+ tunnel required; run: sudo ios tunnel start")
-				}
 				if errors.Is(err, apperr.ErrAppNotInstalled) {
 					return fmt.Errorf("app '%s' not installed on device", bundleID) // AC-04-3
 				}
@@ -136,9 +132,6 @@ func deviceAppsCmd(deps Deps) *cobra.Command {
 			}
 			apps, err := deps.DeviceService.ListInstalledApps(dev.UDID)
 			if err != nil {
-				if errors.Is(err, device.ErrTunnelRequired) {
-					return fmt.Errorf("iOS 17+ tunnel required; run: sudo ios tunnel start")
-				}
 				return err
 			}
 			if len(apps) == 0 {

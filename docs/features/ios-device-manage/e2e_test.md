@@ -1,5 +1,9 @@
 # E2E Test — ios-device-manage
 
+> ## ⚠️ LIVE AMENDMENT（execution 阶段 live 实测权威更正）
+>
+> iOS 26 真机实测：`device install`/`apps`/`uninstall` 经 usbmuxd 可用，**无需 tunnel**。原"iOS 17+ 必须 tunnel"前提证伪。据此 **§3 的 iOS 17+ tunnel 整节（E2E-090/091/092/093/093b/093c/093d）作废**——这些 case 已从自动化测试移除（代码无 tunnel 机器）。其余 E2E case（list/apps/install/uninstall/device-selection/flags）不变。单一事实源：[`requirements.md` Live Amendment](./requirements.md)。
+
 > 从 [`requirements.md`](./requirements.md) AC 单向派生（spec → cases）。验证 [`design.md`](./design.md) 的实现满足每个 AC 的可观测行为。
 
 ## 1. Test Scope

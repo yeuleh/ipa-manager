@@ -1,5 +1,18 @@
 # Requirements — ios-device-manage
 
+> ## ⚠️ LIVE AMENDMENT（execution 阶段 live 实测，权威更正，覆盖以下文档中所有冲突的 tunnel 相关陈述）
+>
+> **发现**：在 iOS 26 真机实测，`device install`/`apps`/`uninstall` 经 **usbmuxd 全部可用，无需 tunnel**（go-ios zipconduit/installationproxy 走 usbmuxd 完整跑通，日志无 tunnel/rsd）。
+>
+> **结论**：原"iOS 17+ 设备服务操作必须 tunnel"前提（源自 research.md 旧信息 + A-03）**证伪**。据此：
+> - **US-07（iOS 17+ tunnel）整条移除**；AC-07-2/3/4 移除（AC-07-1 由 US-01 覆盖）。
+> - **NFR-01（tunnel precondition）移除**。
+> - tunnel 检测/复用机器（design DD-02、`LookupTunnelInfo`/`WithRsd`/`ErrTunnelRequired`/`isIOS17OrLater`）从代码移除。
+> - **保留**："绝不自动 sudo / 不提权"作为**通用**安全约束（NFR-03，不再绑定 tunnel）。
+> - 本文档其余处的 tunnel 相关陈述（A-03、§1、§7 key concepts "SupportsRsd/Tunnel"、§9 clarification）**均以此 amendment 为准，视为过时**。
+>
+> 若未来某环境（无 remoted 的 Mac / 旧 iOS / Apple 再变更）确实出现 usbmuxd 装不上的情况，按"实证驱动"原则：原样上浮 go-ios 错误，基于真实错误模式再加定点处理——不重新引入推测性 tunnel 机器。
+
 ## 1. Intent & Context
 
 ### Problem
@@ -98,16 +111,18 @@
 | US-04 | P1 | As a user, I want to uninstall an app from a device, so that I can remove apps I no longer want. | 设备管理的基本能力。 |
 | US-05 | P1 | As a user, I want to list apps installed on a device, so that I can verify installs and find bundle-ids to uninstall. | install 的可见性搭档；也是发现可卸载 app 的入口。 |
 | US-06 | P1 | As a user, I want to select which device to operate on when multiple are connected, so that I target the right device. | 多设备场景常见（家庭多台 iPhone/iPad）；必须可控。 |
-| US-07 | P1 | As a user with an iOS 17+ device, I want a clear error telling me to start the tunnel, so that I can fix it myself rather than hitting a silent failure. | iOS 17+ 设备普及；silent failure 不可接受；安全红线决定不自动 sudo。 |
+| US-07 | ~~P1~~ **REMOVED** | ~~iOS 17+ tunnel 处理~~ | **live 实测（iOS 26）证伪**：install/apps/uninstall 经 usbmuxd 均可用，无需 tunnel。原 US-07 前提错误，整条移除（详见 §9 live 发现）。保留：不自动 sudo（降为 NFR-03）。 |
 | US-08 | P2 | As a user, I want to refresh to the App Store's latest version before pushing via `--latest`, so that I can update an already-installed app. | "update" 用例；合并进 install 的 flag，覆盖拿新版场景。 |
 | US-09 | P2 | As a user, I want `device install` to accept `--profile <id>`, so that I can install from a non-active account's library without switching. | 多账号一致性体验；仅 install 需要（涉及 library + 凭据），设备只读/卸载操作与账号无关。 |
 | US-10 | P3 | As a user, I want to install a specific version via `--version <v>` when my library holds multiple versions, so that I can put an older version on a legacy device. | 多版本库场景；少数派需求（旧设备不支持最新版）。 |
 
 ### Priority Rationale
 
-- **P1（US-01~07）**：构成"列设备 → 安装 → 管理设备 app"最小可用闭环 + iOS 17+ 正确性。缺任一则 mission 不可交付——无 list 则无可见性；无 install 则核心缺失；无 auto-download 则不自给自足；无 uninstall/apps 则设备不可管理；无多设备选择则多设备场景误操作；无 tunnel 处理则在主流 iOS 17+ 设备上静默失败。
+- **P1（US-01~06）**：构成"列设备 → 安装 → 管理设备 app"最小可用闭环。缺任一则 mission 不可交付——无 list 则无可见性；无 install 则核心缺失；无 auto-download 则不自给自足；无 uninstall/apps 则设备不可管理；无多设备选择则多设备场景误操作。
 - **P2（US-08~09）**：重要增强。`--latest` 提供 update 能力但 install auto-download 已覆盖新 app 的鲜度；`--profile` 是一致性 flag，缺它则多账号需先 `accounts use` 切换。两者缺失时"先切换、用现有版本"也可用。
 - **P3（US-10）**：niche 多版本选择；多数用户只装最新版。
+
+> **US-07（原 iOS 17+ tunnel）已移除**：execution 期 live 实测 iOS 26 设备，install/apps/uninstall 经 usbmuxd 全部可用，无需 tunnel。原"iOS 17+ 必须 tunnel"前提（源自 research.md 旧信息）证伪。"绝不自动 sudo"作为通用安全约束保留为 NFR-03。
 
 ## 5. Acceptance Criteria
 
@@ -166,12 +181,9 @@
 - **AC-06-4**：Given 多台设备连接且未传 `--udid` 且处于非交互模式（非 TTY），When 运行任一设备服务命令，Then 显示 `"multiple devices connected; specify --udid (non-interactive mode)"` 错误，exit 1（无法交互选择）。
 - **AC-06-5**：Given 恰好 1 台设备连接且未传 `--udid`，When 运行任一设备服务命令，Then 自动选中该台设备执行（无需交互），exit 0（成功）或按命令特定结果。
 
-### US-07 — iOS 17+ tunnel 处理
+### US-07 — ~~iOS 17+ tunnel 处理~~ **【整条 REMOVED — live 证伪】**
 
-- **AC-07-1**：Given iOS 17+ 设备已连接且 tunnel 未运行，When 运行 `device list`，Then 该设备**仍被列出**（usbmuxd 可列举），exit 0。
-- **AC-07-2**：Given iOS 17+ 设备无 tunnel，When 运行 `device install <bundle-id>`（library 有 IPA），Then stderr 显示 `"iOS 17+ tunnel required; run: sudo ios tunnel start"`，**不执行推送**，exit 1。
-- **AC-07-3**：Given iOS 17+ 设备无 tunnel，When 运行 `device apps` 或 `device uninstall <bundle-id>`，Then stderr 显示同样的 tunnel 提示消息，**不执行该操作**，exit 1。
-- **AC-07-4**：Given 任意缺 tunnel 场景，When 工具执行设备服务操作，Then **绝不**请求管理员密码、绝不启动 `sudo` / `ios tunnel start` 子进程，仅打印 tunnel 提示消息并 exit 1（用户必须手动启动 tunnel）。
+> **Superseded by live finding (execution phase, iOS 26)**：实测 install/apps/uninstall 经 usbmuxd 均可用，**无需 tunnel**。原 AC-07-2/3/4（tunnel 错误/提示）整条移除。AC-07-1（device list 列出已连接设备，含 iOS 17+）由 US-01/AC-01-1 覆盖（list 本就列出所有已连接设备，与 tunnel 无关）。"绝不自动 sudo"保留为 NFR-03 通用安全约束。详见顶部 Live Amendment。
 
 ### US-08 — `--latest`（update 用例）
 
@@ -198,7 +210,7 @@
 
 | ID | Category | Requirement | Measurement |
 |----|----------|-------------|-------------|
-| NFR-01 | Reliability — tunnel precondition | iOS 17+ 缺 tunnel 时绝不静默失败或挂起；在合理时间内返回 `ErrTunnelRequired`。 | iOS 17+ 无 tunnel 时 `device install` 在 5s 内 exit 1 + 可操作消息。 |
+| NFR-01 | ~~Reliability — tunnel precondition~~ **REMOVED** | ~~iOS 17+ tunnel 前置~~ | live 证伪：iOS 17+ 无需 tunnel（usbmuxd 可用）。此 NFR 移除。 |
 | NFR-02 | Reliability — failure boundary | preflight 失败（无设备 / tunnel 缺失 / trust / profile/凭据 / library 缺且下载失败）在任意设备写入**之前**报错，设备状态不变。传输中途失败（网络中断等）诚实上浮 go-ios 错误；工具**不声称**设备端回滚（那是 go-ios 的职责，本工具 Non-goal 不做安装后完整性校验）。 | preflight 失败后 `device apps` 与失败前一致；中途失败显示明确错误 + exit 1（不谎称成功）。 |
 | NFR-03 | Security — no privilege escalation | 工具**绝不**运行 `sudo` / 自动启动 tunnel；用户必须手动。 | 源码审计：执行路径 grep `sudo` / exec 提权调用为空。 |
 | NFR-04 | Usability — actionable errors | 所有设备错误（无设备 / tunnel / trust / 未装 / 不存在）含人类可读原因 + 下一步建议。 | 每条错误消息含 cause + suggestion（如 `run: sudo ios tunnel start` / `trust this Mac on the device`）。 |
