@@ -13,8 +13,9 @@ import (
 //
 //	T1: ListDeviceEntries / GetDeviceEntry / GetLockdownInfo
 //	T2: OpenInstallationProxy (+ ProxyConn)
-//	T3: OpenInstaller (+ InstallerConn) / LookupTunnelInfo
+//	T3: OpenInstaller (+ InstallerConn)
 //	T5: ProxyConn gains Uninstall
+//	(tunnel methods LookupTunnelInfo/WithRsd were removed — see Live Amendment)
 type Backend interface {
 	// ListDeviceEntries returns connected devices via usbmuxd (ios.ListDevices).
 	ListDeviceEntries() ([]ios.DeviceEntry, error)
