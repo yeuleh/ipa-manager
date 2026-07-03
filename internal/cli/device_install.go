@@ -17,7 +17,7 @@ import (
 	"github.com/yeuleh/ipa-manager/internal/library"
 )
 
-// deviceInstallCmd implements `device install` (US-02/03/07/08/09/10).
+// deviceInstallCmd implements `device install` (US-02/03/08/09/10).
 func deviceInstallCmd(deps Deps) *cobra.Command {
 	var profileFlag, udidFlag, versionFlag string
 	var latestFlag bool
