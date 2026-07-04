@@ -262,3 +262,13 @@ ok  	github.com/yeuleh/ipa-manager/internal/library	4.353s
 - **文件级改动**:每个 task 的修改 / 新增文件清单完整
 
 执行阶段(`mission_advance_stage` 到 execution)不需要发明任何决策,只需按本 plan 实施。
+
+---
+
+## 8. Minor Findings Ledger(validate 阶段 triage)
+
+> 来自 T1 Spock review 的 🟢 Minor findings,接受为 residual risk,不在 execution 阶段修复。validate 阶段统一 triage。
+
+| Finding ID | Source | Description                                                              | Acceptance Decision                                                                                  |
+| ---------- | ------ | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| MF-01      | T1     | `mapAppStoreError` 支持 wrapped sentinel(`fmt.Errorf("x: %w", ErrPasswordTokenExpired)` 会正确转换),但当前无测试覆盖该 wrapped case | 接受 residual risk。ipatool 实测返回的是 raw sentinel(不是 wrapped),wrapped 路径是"未来兼容",非当前 bug。validate 阶段如要加固可补测试。 |

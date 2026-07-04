@@ -122,7 +122,7 @@ func (a *profileAppStoreAdapter) Download(input DownloadInput) (DownloadResult, 
 		ExternalVersionID: input.ExternalVersionID,
 	})
 	if err != nil {
-		return DownloadResult{}, mapDownloadError(err)
+		return DownloadResult{}, mapAppStoreError(err)
 	}
 	return DownloadResult{
 		DestinationPath: out.DestinationPath,
@@ -146,10 +146,16 @@ func (a *profileAppStoreAdapter) Purchase(bundleID string, appID int64, price fl
 	if a.account == nil {
 		return fmt.Errorf("AccountInfo must be called before Purchase")
 	}
-	return a.inner.Purchase(ipaappstore.PurchaseInput{
+	// FIX (mission fix-purchase-token-expired): route Purchase errors through
+	// mapAppStoreError so that ipatool sentinels (e.g. ErrPasswordTokenExpired)
+	// are converted to apperr sentinels. Without this, CLI layer's
+	// errors.Is(apperr.ErrPasswordTokenExpired) check fails to match, bypassing
+	// the auto-refresh recovery path in handleLicenseRequired.
+	err := a.inner.Purchase(ipaappstore.PurchaseInput{
 		Account: *a.account,
 		App:     ipaappstore.App{ID: appID, BundleID: bundleID, Price: price},
 	})
+	return mapAppStoreError(err)
 }
 
 func (a *profileAppStoreAdapter) RefreshSession() error {
