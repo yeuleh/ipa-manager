@@ -1,6 +1,7 @@
 package appstore
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/yeuleh/ipa-manager/internal/account"
+	"github.com/yeuleh/ipa-manager/internal/apperr"
 )
 
 func TestKeychainServiceName(t *testing.T) {
@@ -130,4 +132,153 @@ func TestProfileAppStore_Interface(t *testing.T) {
 	_ = input
 	_ = result
 	_ = ipaappstore.AppStore(nil) // ipatool import only used in adapter tests (white-box)
+}
+
+// mockIPatoolAppStore is a minimal mock of ipaappstore.AppStore (11 methods)
+// for adapter unit tests. Only methods exercised by tests have real behavior;
+// others panic so unintended calls surface during test development.
+//
+// Used by T1 tests (E2E-004/005) of mission fix-purchase-token-expired.
+type mockIPatoolAppStore struct {
+	// Purchase
+	purchaseErr   error
+	purchaseCalls int
+	// AccountInfo (needed because adapter requires a.account != nil before Purchase)
+	accountInfoResult ipaappstore.AccountInfoOutput
+	accountInfoErr    error
+}
+
+func (m *mockIPatoolAppStore) Purchase(input ipaappstore.PurchaseInput) error {
+	m.purchaseCalls++
+	return m.purchaseErr
+}
+
+func (m *mockIPatoolAppStore) AccountInfo() (ipaappstore.AccountInfoOutput, error) {
+	return m.accountInfoResult, m.accountInfoErr
+}
+
+// All other 9 methods panic by default (not exercised by adapter Purchase tests).
+func (m *mockIPatoolAppStore) Login(ipaappstore.LoginInput) (ipaappstore.LoginOutput, error) {
+	panic("Login: not expected in adapter Purchase test")
+}
+func (m *mockIPatoolAppStore) Revoke() error {
+	panic("Revoke: not expected in adapter Purchase test")
+}
+func (m *mockIPatoolAppStore) Lookup(ipaappstore.LookupInput) (ipaappstore.LookupOutput, error) {
+	panic("Lookup: not expected in adapter Purchase test")
+}
+func (m *mockIPatoolAppStore) Search(ipaappstore.SearchInput) (ipaappstore.SearchOutput, error) {
+	panic("Search: not expected in adapter Purchase test")
+}
+func (m *mockIPatoolAppStore) Download(ipaappstore.DownloadInput) (ipaappstore.DownloadOutput, error) {
+	panic("Download: not expected in adapter Purchase test")
+}
+func (m *mockIPatoolAppStore) ReplicateSinf(ipaappstore.ReplicateSinfInput) error {
+	panic("ReplicateSinf: not expected in adapter Purchase test")
+}
+func (m *mockIPatoolAppStore) ListVersions(ipaappstore.ListVersionsInput) (ipaappstore.ListVersionsOutput, error) {
+	panic("ListVersions: not expected in adapter Purchase test")
+}
+func (m *mockIPatoolAppStore) GetVersionMetadata(ipaappstore.GetVersionMetadataInput) (ipaappstore.GetVersionMetadataOutput, error) {
+	panic("GetVersionMetadata: not expected in adapter Purchase test")
+}
+func (m *mockIPatoolAppStore) Bag(ipaappstore.BagInput) (ipaappstore.BagOutput, error) {
+	panic("Bag: not expected in adapter Purchase test")
+}
+
+// Compile-time assertion that mockIPatoolAppStore satisfies ipaappstore.AppStore.
+var _ ipaappstore.AppStore = (*mockIPatoolAppStore)(nil)
+
+// TestPurchase_TokenExpired_ConvertsToApperrSentinel verifies the fix for
+// mission fix-purchase-token-expired (E2E-004): when ipatool's Purchase
+// returns ErrPasswordTokenExpired, the adapter MUST convert it to
+// apperr.ErrPasswordTokenExpired so the CLI layer's errors.Is match succeeds
+// and the auto-refresh recovery path in handleLicenseRequired is triggered.
+func TestPurchase_TokenExpired_ConvertsToApperrSentinel(t *testing.T) {
+	inner := &mockIPatoolAppStore{
+		purchaseErr: ipaappstore.ErrPasswordTokenExpired,
+	}
+	adapter := &profileAppStoreAdapter{
+		inner:   inner,
+		account: &ipaappstore.Account{Email: "test@example.com"},
+	}
+
+	err := adapter.Purchase("com.test", 123, 0)
+
+	require.Error(t, err, "Purchase with token-expired error must return error")
+	assert.True(t, errors.Is(err, apperr.ErrPasswordTokenExpired),
+		"Purchase should convert ipatool ErrPasswordTokenExpired → apperr.ErrPasswordTokenExpired; got: %v", err)
+	// E2E-004 reverse contract: raw ipatool sentinel must NO LONGER be visible
+	// through errors.Is (otherwise the adapter is leaking implementation detail
+	// and a future change might accidentally expose both sentinels).
+	assert.False(t, errors.Is(err, ipaappstore.ErrPasswordTokenExpired),
+		"adapter must not expose raw ipatool ErrPasswordTokenExpired after conversion; got: %v", err)
+	assert.Equal(t, 1, inner.purchaseCalls, "inner.Purchase should be called exactly once")
+}
+
+// TestPurchase_NonSentinelError_Passthrough verifies E2E-005: when ipatool's
+// Purchase returns a non-sentinel error (e.g. network failure, Apple 500),
+// the adapter passes it through unchanged — no false conversion to apperr
+// sentinel. This is AC-01-3's adapter-side contract (non-token errors keep
+// their identity for the CLI's "license acquisition failed:" path).
+func TestPurchase_NonSentinelError_Passthrough(t *testing.T) {
+	originalErr := errors.New("apple 500 internal error")
+	inner := &mockIPatoolAppStore{
+		purchaseErr: originalErr,
+	}
+	adapter := &profileAppStoreAdapter{
+		inner:   inner,
+		account: &ipaappstore.Account{Email: "test@example.com"},
+	}
+
+	err := adapter.Purchase("com.test", 123, 0)
+
+	require.Error(t, err, "Purchase with non-sentinel error must return error")
+	assert.False(t, errors.Is(err, apperr.ErrPasswordTokenExpired),
+		"non-sentinel errors must NOT be converted to apperr.ErrPasswordTokenExpired")
+	// Identity preservation: mapAppStoreError returns unknown errors unchanged
+	// (same pointer), not a copy. assert.Same verifies interface identity.
+	assert.Same(t, originalErr, err,
+		"non-sentinel error should pass through with identity preserved (same pointer)")
+	assert.Equal(t, "apple 500 internal error", err.Error(),
+		"error message should match original")
+	assert.Equal(t, 1, inner.purchaseCalls, "inner.Purchase should be called exactly once")
+}
+
+// TestPurchase_NilAccount_ReturnsErrorWithoutCallingInner verifies a defensive
+// boundary: if AccountInfo was never called (account == nil), Purchase must
+// fail fast WITHOUT calling inner.Purchase (avoiding a nil-dereference panic
+// inside ipatool when constructing PurchaseInput with a nil account deref).
+func TestPurchase_NilAccount_ReturnsErrorWithoutCallingInner(t *testing.T) {
+	inner := &mockIPatoolAppStore{}
+	adapter := &profileAppStoreAdapter{
+		inner:   inner,
+		account: nil, // explicitly nil
+	}
+
+	err := adapter.Purchase("com.test", 123, 0)
+
+	require.Error(t, err, "Purchase with nil account must return error")
+	assert.Contains(t, err.Error(), "AccountInfo must be called",
+		"error should explain the precondition")
+	assert.Equal(t, 0, inner.purchaseCalls,
+		"inner.Purchase must NOT be called when account is nil (defensive)")
+}
+
+// TestPurchase_Success_ReturnsNil verifies the happy path: when inner.Purchase
+// returns nil, the adapter returns nil (no spurious conversion). This is a
+// regression guard ensuring the fix doesn't accidentally convert success.
+func TestPurchase_Success_ReturnsNil(t *testing.T) {
+	inner := &mockIPatoolAppStore{
+		purchaseErr: nil, // success
+	}
+	adapter := &profileAppStoreAdapter{
+		inner:   inner,
+		account: &ipaappstore.Account{Email: "test@example.com"},
+	}
+
+	err := adapter.Purchase("com.test", 123, 0)
+
+	assert.NoError(t, err, "Purchase with nil error must return nil")
+	assert.Equal(t, 1, inner.purchaseCalls)
 }

@@ -76,11 +76,17 @@ type mockAppStore struct {
 	downloadCalls    int
 	replicateSinfErr error
 
-	// NEW (T4): retry methods
+	// NEW (T4): retry methods — extended in mission fix-purchase-token-expired T2
+	// 支持序列模式(第一次失败 + 第二次成功,模仿 downloadErrors 模式)+ 调用计数。
+	// 保留 bool 字段(purchaseCalled/refreshSessionCalled)向后兼容现有 5 个
+	// assertion site(app_download_edge_test.go:64,90,133 + device_test.go:666,691)。
 	purchaseErr          error
 	purchaseCalled       bool
+	purchaseErrors       []error // 序列优先;为空时 fallback 到 purchaseErr(向后兼容)
+	purchaseCalls        int     // 调用计数
 	refreshSessionErr    error
 	refreshSessionCalled bool
+	refreshSessionCalls  int // 调用计数
 }
 
 func (m *mockAppStore) GetAuthEndpoint() (string, error) {
@@ -142,14 +148,23 @@ func (m *mockAppStore) ReplicateSinf([]appstore.Sinf, string) error {
 	return m.replicateSinfErr
 }
 
-// NEW (T4): retry methods
+// NEW (T4): retry methods — extended in mission fix-purchase-token-expired T2
+// Purchase 支持 purchaseErrors []error 序列模式(模仿 Download 的 downloadErrors):
+// 第 N 次调用返回 purchaseErrors[N-1](如果存在);否则 fallback 到 purchaseErr。
+// 这让 E2E-001 可以模拟"第一次 Purchase 返回 token-expired,第二次成功"。
 func (m *mockAppStore) Purchase(string, int64, float64) error {
 	m.purchaseCalled = true
+	idx := m.purchaseCalls
+	m.purchaseCalls++
+	if idx < len(m.purchaseErrors) {
+		return m.purchaseErrors[idx]
+	}
 	return m.purchaseErr
 }
 
 func (m *mockAppStore) RefreshSession() error {
 	m.refreshSessionCalled = true
+	m.refreshSessionCalls++
 	return m.refreshSessionErr
 }
 
