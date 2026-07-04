@@ -134,9 +134,12 @@ go test ./internal/cli/ -count=1 -run 'TestHandleLicenseRequired_Purchase' -v &&
 go test ./internal/cli/ -count=1 -v  # 确保现有测试无回归(包括 device_test.go)
 
 # Final integration verification(本 mission 整体完工验证,涵盖 E2E-006/007 + NFR-01/02/03)
-go test ./... -count=1                                            # E2E-006 全项目无回归
-git diff --exit-code go.mod go.sum                                # E2E-007 不动 fork
-rg -i 'ghp_|appleid|password:\s*"[^"]{8,}"' internal/ 2>&1 | grep -vE 'password:\s*"(correct-password|wrong-password|secret-pass-123|p|a|b|test-pass)"' || true  # NFR-03 无真实 secret(过滤测试 fixture)
+go test ./... -count=1                                              # E2E-006 全项目无回归
+git diff --exit-code go.mod go.sum                                  # E2E-007 不动 fork(exit 0 = 无变更)
+# NFR-03 secret scan:精确匹配真实凭据模式(`!` 让无命中=exit 0=PASS;有命中=exit 1=FAIL)
+# 注意:rg 默认支持 regex,不要用 -E(那是 encoding flag,不是 extended regex)
+! rg -i 'ghp_[a-z0-9]{36}|github_pat_[a-z0-9_]{82}|gho_[a-z0-9]{36}|ghs_[a-z0-9]{36}|sk-[a-z0-9]{48}' internal/  # 真实 token
+! rg -i '[a-z0-9._%+-]+@(gmail|icloud|outlook|hotmail|yahoo|live|msn)\.com' internal/  # 真实邮箱(测试用 example.com 不命中)
 ```
 
 **Completion criteria**:
@@ -178,8 +181,8 @@ rg -i 'ghp_|appleid|password:\s*"[^"]{8,}"' internal/ 2>&1 | grep -vE 'password:
 | E2E-003  | US-01 / AC-01-3 / NFR-04 | T2   | CLI     |
 | E2E-004  | NFR-06                   | T1   | adapter |
 | E2E-005  | NFR-06 / AC-01-3         | T1   | adapter |
-| E2E-006  | NFR-01 / NFR-04          | T1+T2 | 全项目 |
-| E2E-007  | NFR-02                   | T1+T2 | artifact |
+| E2E-006  | NFR-01 / NFR-04          | T2 final verification | 全项目 |
+| E2E-007  | NFR-02                   | T2 final verification | artifact |
 
 ### Reverse Coverage Verification
 
@@ -200,13 +203,13 @@ rg -i 'ghp_|appleid|password:\s*"[^"]{8,}"' internal/ 2>&1 | grep -vE 'password:
 | ------- | --------------------------------------------------------------------- | ---------- | ------ | --------------------------------------------------------------------------------------------------------- |
 | R1      | Rename `mapDownloadError` 漏改 call site                              | LOW        | LOW    | Go compiler 强制:`go build ./...` 会立即失败。当前仅 1 处调用(`client_impl.go:125`)。                       |
 | R2      | mock `ipaappstore.AppStore` interface 过于复杂(11 方法)                | LOW        | LOW    | 只需实现 Purchase + AccountInfo + 必要的 lookup 方法;其他方法 panic / return zero(测试不会触发)。              |
-| R3      | 扩展 `mockAppStore` 字段破坏现有 6 个测试                               | LOW        | MEDIUM | 保留 `purchaseCalled bool` + `refreshSessionCalled bool` 字段,mock 方法内同时更新 bool 和 int。`go test ./internal/cli/` 即可发现回归。 |
+| R3      | 扩展 `mockAppStore` 字段破坏现有 5 个 assertion site                  | LOW        | MEDIUM | 保留 `purchaseCalled bool` + `refreshSessionCalled bool` 字段,mock 方法内同时更新 bool 和 int。`go test ./internal/cli/` 即可发现回归。 |
 | R4      | E2E-001 中 stdout 断言 `license acquired, retrying download...` 字面变化 | LOW        | LOW    | 字符串硬编码在 `app_download.go:256`,本 mission 不修改该文件,字面稳定。                                       |
 | R5      | E2E-002 中 stderr 断言依赖错误包装链格式                                | LOW        | LOW    | `app_download.go:247` 的 `fmt.Errorf("re-login failed: %w", err)` 格式稳定;本 mission 不修改。                   |
 | R6      | 真实 token 过期无法在 validate 阶段触发(M-1 opportunistic)            | MEDIUM     | LOW    | 自动化测试(E2E-001..005)是 required validation,已覆盖核心契约。M-1 是 smoke,不阻塞。fallback:`auth login`。 |
 
 **Compatibility / migration / regression-sensitive areas**:
-- 现有 6 个测试引用 `purchaseCalled` / `refreshSessionCalled`(`app_download_edge_test.go` / `device_test.go` / `auth_test.go`)— **必须**保留 bool 字段
+- 现有 5 个 assertion site 引用 `purchaseCalled` / `refreshSessionCalled`(`app_download_edge_test.go:64,90,133` + `device_test.go:666,691`)— **必须**保留 bool 字段
 - `TestDownload_TokenExpired_AutoRelogin`(`app_download_test.go:118`)— 验证 Download 路径不受 rename 影响
 
 **Security / privacy / performance concerns**: 无(纯错误处理路径变化,无凭据/IO/算法变化)。
