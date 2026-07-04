@@ -76,7 +76,7 @@
 ```bash
 go build ./... && \
 go vet ./... && \
-go test ./internal/appstore/ -count=1 -run 'TestPurchase|TestDownload|TestMapAppStoreError' -v
+go test ./internal/appstore/ -count=1 -run 'TestPurchase|TestDownload' -v
 ```
 
 **Completion criteria**:
@@ -116,7 +116,7 @@ go test ./internal/appstore/ -count=1 -run 'TestPurchase|TestDownload|TestMapApp
   ```
   - Purchase mock 方法逻辑:优先用 `purchaseErrors` 序列(逐次 pop),fallback 到 `purchaseErr`(兼容);每次调用 `purchaseCalls++`
   - RefreshSession mock 方法逻辑:`refreshSessionCalls++`,return `refreshSessionErr`
-- **兼容性约束**:现有 6 个引用 `purchaseCalled` / `refreshSessionCalled` 的测试(`app_download_edge_test.go:64,90,133`、`device_test.go:666,691`、`auth_test.go`)必须继续工作 —— `bool` 字段保留(在 mock 方法内同时设 `purchaseCalled = true` 和 `purchaseCalls++`)
+- **兼容性约束**:现有 5 个 assertion site 引用 `purchaseCalled` / `refreshSessionCalled`(`app_download_edge_test.go:64,90,133`、`device_test.go:666,691`)— `auth_test.go:80-84` 是字段/方法定义,不是 assertion site — 这些测试必须继续工作 —— `bool` 字段保留(在 mock 方法内同时设 `purchaseCalled = true` 和 `purchaseCalls++`)
 
 **Files to add for tests**:
 - `internal/cli/app_download_edge_test.go`(推荐)或 `app_download_test.go` — 新增 3 个测试 case:
@@ -127,10 +127,16 @@ go test ./internal/appstore/ -count=1 -run 'TestPurchase|TestDownload|TestMapApp
 
 **Acceptance command**:
 ```bash
+# T2 自身验证
 go build ./... && \
 go vet ./... && \
 go test ./internal/cli/ -count=1 -run 'TestHandleLicenseRequired_Purchase' -v && \
 go test ./internal/cli/ -count=1 -v  # 确保现有测试无回归(包括 device_test.go)
+
+# Final integration verification(本 mission 整体完工验证,涵盖 E2E-006/007 + NFR-01/02/03)
+go test ./... -count=1                                            # E2E-006 全项目无回归
+git diff --exit-code go.mod go.sum                                # E2E-007 不动 fork
+rg -i 'ghp_|appleid|password:\s*"[^"]{8,}"' internal/ 2>&1 | grep -vE 'password:\s*"(correct-password|wrong-password|secret-pass-123|p|a|b|test-pass)"' || true  # NFR-03 无真实 secret(过滤测试 fixture)
 ```
 
 **Completion criteria**:
@@ -193,7 +199,7 @@ go test ./internal/cli/ -count=1 -v  # 确保现有测试无回归(包括 device
 | Risk ID | Risk                                                                  | Likelihood | Impact | Mitigation                                                                                                |
 | ------- | --------------------------------------------------------------------- | ---------- | ------ | --------------------------------------------------------------------------------------------------------- |
 | R1      | Rename `mapDownloadError` 漏改 call site                              | LOW        | LOW    | Go compiler 强制:`go build ./...` 会立即失败。当前仅 1 处调用(`client_impl.go:125`)。                       |
-| R2      | mock `ipaappstore.AppStore` interface 过于复杂(12 方法)                | LOW        | LOW    | 只需实现 Purchase + AccountInfo + 必要的 lookup 方法;其他方法 panic / return zero(测试不会触发)。              |
+| R2      | mock `ipaappstore.AppStore` interface 过于复杂(11 方法)                | LOW        | LOW    | 只需实现 Purchase + AccountInfo + 必要的 lookup 方法;其他方法 panic / return zero(测试不会触发)。              |
 | R3      | 扩展 `mockAppStore` 字段破坏现有 6 个测试                               | LOW        | MEDIUM | 保留 `purchaseCalled bool` + `refreshSessionCalled bool` 字段,mock 方法内同时更新 bool 和 int。`go test ./internal/cli/` 即可发现回归。 |
 | R4      | E2E-001 中 stdout 断言 `license acquired, retrying download...` 字面变化 | LOW        | LOW    | 字符串硬编码在 `app_download.go:256`,本 mission 不修改该文件,字面稳定。                                       |
 | R5      | E2E-002 中 stderr 断言依赖错误包装链格式                                | LOW        | LOW    | `app_download.go:247` 的 `fmt.Errorf("re-login failed: %w", err)` 格式稳定;本 mission 不修改。                   |
@@ -207,9 +213,9 @@ go test ./internal/cli/ -count=1 -v  # 确保现有测试无回归(包括 device
 
 ---
 
-## 6. Pre-execution Baseline(2026-07-04)
+## 6. Pre-execution Baseline(2026-07-04 实测)
 
-```bash
+```
 $ git status --short
 (empty — clean working tree)
 
@@ -220,14 +226,24 @@ $ go build ./...
 (exit 0,无输出)
 
 $ go vet ./...
-(exit 0,假设 — 验证步骤)
+(exit 0,无输出)
 
 $ go test ./... -count=1
-(全绿,201+ tests,基线)
+?   	github.com/yeuleh/ipa-manager/cmd/ipa-manager	[no test files]
+ok  	github.com/yeuleh/ipa-manager/internal/account	3.740s
+?   	github.com/yeuleh/ipa-manager/internal/apperr	[no test files]
+ok  	github.com/yeuleh/ipa-manager/internal/appstore	4.193s
+ok  	github.com/yeuleh/ipa-manager/internal/cli	3.892s
+?   	github.com/yeuleh/ipa-manager/internal/config	[no test files]
+ok  	github.com/yeuleh/ipa-manager/internal/device	4.021s
+?   	github.com/yeuleh/ipa-manager/internal/doctor	[no test files]
+ok  	github.com/yeuleh/ipa-manager/internal/library	4.353s
+?   	github.com/yeuleh/ipa-manager/internal/ui	[no test files]
 ```
+**全绿基线确认**(5 个有测试的 package 全 ok,4 个无测试 package 正常)。
 
 **Branch**: `feature/fix-purchase-token-expired`(mission 创建时已切)
-**Last commit**: `44da0e4` — design + e2e_test Spock PASS 修正
+**Last commit**: `65b836e` — plan T1+T2 vertical slices
 **Working tree**: clean
 
 ---
