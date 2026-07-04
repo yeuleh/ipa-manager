@@ -86,7 +86,7 @@ US-01 (P1: device install token 过期自动 refresh + retry)
 | NFR-03 | secret scan(无真实 token / 邮箱命中)                                                                                                                       |
 | NFR-04 | 现有 Download/Login/RefreshSession 路径测试全绿(TestDownload_TokenExpired_AutoRelogin + TestDownload_LicenseRequired_FreeApp_UserYes)                          |
 | NFR-05 | E2E-002 stderr 断言                                                                                                                                          |
-| NFR-06 | mapAppStoreError 被 Download + Purchase 共享(`grep -c 'mapAppStoreError' client_impl.go` = 2 实际调用)                                                       |
+| NFR-06 | mapAppStoreError 被 Download + Purchase 共享(`rg 'mapAppStoreError\(' internal/appstore/client_impl.go` 命中 2 处实际调用;另有 1 处在注释中)                                                       |
 
 **Reverse coverage 验证**:所有 4 个 AC + 6 个 NFR 全部 traceable 到代码 + 测试。**无 orphan**。
 
@@ -166,11 +166,13 @@ US-01 (P1: device install token 过期自动 refresh + retry)
 
 ## 9. Mission Diff Summary
 
+实际 `git diff --stat main..HEAD`:
+
 ```
- docs/features/fix-purchase-token-expired/design.md       | 276 ++++++++++
- docs/features/fix-purchase-token-expired/e2e_test.md     | 222 ++++++++++
- docs/features/fix-purchase-token-expired/plan.md         | 275 ++++++++++
- docs/features/fix-purchase-token-expired/requirements.md | 166 ++++++++
+ docs/features/fix-purchase-token-expired/design.md       | 276 +++++++++
+ docs/features/fix-purchase-token-expired/e2e_test.md     | 222 +++++++++
+ docs/features/fix-purchase-token-expired/plan.md         | 275 +++++++++
+ docs/features/fix-purchase-token-expired/requirements.md | 166 +++++++
  docs/features/fix-purchase-token-expired/validate.md     | (this file)
  internal/appstore/client_impl.go                         |  10 +-(2 行核心 fix + 6 行注释)
  internal/appstore/client_test.go                         | 151 +++++++-(4 测试 + mock)
@@ -178,7 +180,7 @@ US-01 (P1: device install token 过期自动 refresh + retry)
  internal/cli/app_download_edge_test.go                   | 124 +++++++-(3 测试)
  internal/cli/auth_test.go                                |  19 +-(mock 字段扩展)
  
- 9 files changed, ~1270 insertions(+), ~7 deletions(+)
+ 10 files changed, 1433 insertions(+), 7 deletions(-)
 ```
 
 **生产代码净改动**:**5 行**(2 文件)— 1 行 fix + rename + 注释。
