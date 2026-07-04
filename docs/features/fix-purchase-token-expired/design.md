@@ -59,7 +59,7 @@
 **Rationale**:
 - 满足 **NFR-06 Maintainability**(requirements.md):避免两份独立 if-else 列表,防止同类 bug 再次发生。
 - `mapDownloadError` 当前转换 `ErrLicenseRequired` + `ErrPasswordTokenExpired` 两个 sentinel。Purchase 路径只会返回 `ErrPasswordTokenExpired`(LicenseRequired 是 Download 特有的);**超集转换对 Purchase 无副作用**(Purchase 不会返回 LicenseRequired,即使返回,转成 apperr.ErrLicenseRequired 也合理且向后兼容)。
-- 重命名是机械 refactor,零行为风险。
+- 重命名是机械 refactor,Go 编译器会捕获所有遗漏的调用点(`errors.go:16` 当前只有 `client_impl.go:125` Download 方法一处调用)。
 
 **Implementation**:
 ```go
@@ -77,30 +77,45 @@ func mapAppStoreError(err error) error {
 }
 ```
 
+**Behavioral impact**(精确表述):
+- **Download 方法行为不变** —— 调用点 rename,转换逻辑零修改。
+- **Purchase 方法行为有意改变** —— 从"返回 ipatool 原始 sentinel"变为"返回对应的 apperr sentinel"(这是 fix 的核心)。这是**预期的破坏性变化**(bug fix 的本质)。
+- **未调用 rename 后 helper 的调用点**会被 Go 编译器捕获(类型安全的重构保障)。
+
 **Alternatives considered**:
 - **(a) Inline 在 Purchase 方法内加 `if errors.Is(...)`**:违反 DRY,新增 sentinel 要改两处。被 NFR-06 拒绝。
 - **(b) 新建 `mapPurchaseError` helper**:同样违反 DRY(两个 helper 内容会重复)。
 - **(c) 完全泛化(mapAllErrors 处理所有 ipatool sentinel)**:over-engineering,YAGNI(见 requirements §3 Out of Scope)。
 
-#### DD-02: 测试策略 — 双层覆盖
+#### DD-02: 测试策略 — 三层覆盖(对齐 e2e_test.md)
 
-**Decision**: 加两个测试:
+**Decision**: 加 5 个测试用例,分两层:
 
-1. **adapter 层单元测试**(必加)— `internal/appstore/client_test.go` 新增 `TestPurchase_TokenExpired_ConvertsToApperrSentinel`:
-   - **目的**: 验证 Purchase 失败时正确转换 sentinel(fix 的直接契约)。
-   - **方法**: 构造 `profileAppStoreAdapter` 实例,注入 mock `ipaappstore.AppStore` interface,让 mock 的 `Purchase` 返回 `ipaappstore.ErrPasswordTokenExpired`。
-   - **断言**: `errors.Is(returnedErr, apperr.ErrPasswordTokenExpired)` 为 true。
+**Layer 1 — adapter 层单元测试**(2 个 case,验证 fix 的直接契约):
+- `TestPurchase_TokenExpired_ConvertsToApperrSentinel`(E2E-004):mock `ipaappstore.AppStore` interface 让 Purchase 返回 `ipaappstore.ErrPasswordTokenExpired`,断言 `errors.Is(returned, apperr.ErrPasswordTokenExpired)` == true。
+- `TestPurchase_NonSentinelError_Passthrough`(E2E-005):mock 返回非 sentinel 错误,断言原样透传。
 
-2. **CLI 层端到端测试**(加)— `internal/cli/app_download_test.go`(或 `app_download_edge_test.go`)新增 `TestHandleLicenseRequired_PurchaseTokenExpired_Retries`:
-   - **目的**: 验证 AC-01-1 的完整路径(Purchase 失败 → refresh → retry → 成功)在 CLI 编排层正确串联。
-   - **方法**: mock `ProfileAppStore`,让第一次 `Purchase` 返回 `apperr.ErrPasswordTokenExpired`、`RefreshSession` 返回 nil、第二次 `Purchase` 返回 nil;后续 `Download` 成功。
-   - **断言**: `RefreshSession` 被调用 1 次、`Purchase` 被调用 2 次、命令 exit 0、`library.Add` 被调用(IPA 进入库)。
+**Layer 2 — CLI 层端到端测试**(3 个 case,覆盖 AC-01-1/2/3 + NFR-05 stderr 断言):
+- `TestHandleLicenseRequired_PurchaseTokenExpired_Retries`(E2E-001):happy path → exit 0、purchaseCalls=2、refreshSessionCalls=1。
+- `TestHandleLicenseRequired_PurchaseTokenExpired_RefreshFails`(E2E-002):refresh 失败 → stderr 以 `re-login failed:` 开头、不含 `STDQ` / `password token is expired`(NFR-05 可执行断言)。
+- `TestHandleLicenseRequired_PurchaseNonTokenError_NoRefresh`(E2E-003):非 token 错误 → refreshSessionCalls=0、stderr 保持 `license acquisition failed:` 格式。
 
-**为什么 CLI 层测试也要加**:虽然既有测试覆盖了 Download 路径的 token-expired(`app_download_test.go:115 TestDownload_TokenExpired_AutoRelogin`),但 **Purchase 路径** 的 token-expired 重试(`handleLicenseRequired` 内的 `if errors.Is(err, apperr.ErrPasswordTokenExpired)` 分支)目前**无专门测试**。补一个测试锁定该路径的契约。
+**Mock 基础设施扩展**(必要前置):
+- 现有 `mockAppStore` 字段(`internal/cli/auth_test.go:80-84`)仅有 `purchaseErr error` / `purchaseCalled bool` / `refreshSessionErr error` / `refreshSessionCalled bool`。
+- **需要扩展**:`purchaseErrors []error`(序列模拟第一次失败/第二次成功)、`purchaseCalls int`、`refreshSessionCalls int`。
+- 现有 `mockAppStore.Download` 已支持 `downloadResults []DownloadResult` + `downloadErrors []error` 序列模式(`auth_test.go:124-125`),Purchase 模仿该模式即可。
+
+**为什么 CLI 层 Purchase-path 测试必要**:
+- 现有 `TestDownload_TokenExpired_AutoRelogin`(`app_download_test.go:118`)只覆盖 **Download** 路径 token-expired → 调用 `handleTokenExpired`(`app_download.go:260`)。
+- 本 mission 关注的 **Purchase** 路径 token-expired 走的是 `handleLicenseRequired`(`app_download.go:244-254`)的 inline retry 分支,**从未被任何测试执行过**。补测试锁定。
+
+**关于 NFR-05 stderr 断言**:
+- E2E-002 是 NFR-05 的**可执行验证**(stderr 不含 `STDQ` / `password token is expired`),与 requirements.md NFR-05 measurement "新增 stderr 断言测试" 对齐。
+- 无需独立的 stderr 字符串测试 —— E2E-002 已经在 CLI 层做了端到端验证。
 
 **Alternatives considered**:
-- **只加 adapter 层测试**:不够,因为 CLI 层的 `handleLicenseRequired` token-expired 分支(`app_download.go:244-254`)虽然有代码,但从未被任何测试执行过(代码审查发现)。补测试锁定。
-- **加 stderr 字符串断言测试**(NFR-05):**改为依赖 adapter 测试 + CLI 测试中的 error wrapping 链**:`re-login failed: <reason>` 的格式由 `app_download.go:247` 的 `fmt.Errorf("re-login failed: %w", err)` 决定。NFR-05 的"不暴露 STDQ / password token is expired"在 AC-01-2 路径自动满足 —— 因为 token-expired 已被转换成 apperr sentinel,`%w` 包装的是 RefreshSession 的错误(不会包含 Apple 的内部术语)。**无需额外 stderr 字符串断言测试**,现有 wrapping 逻辑足够保证。
+- **只加 adapter 层测试**:不够,因为 CLI 层的 `handleLicenseRequired` token-expired 分支(`app_download.go:244-254`)虽有代码但从未被测试执行过。
+- **加独立的 NFR-05 stderr 测试**(不依赖 E2E-002):冗余,E2E-002 已经覆盖。
 
 ## 3. Data Models / State / Interfaces
 
@@ -171,7 +186,7 @@ func mapAppStoreError(err error) error {
 │ 10. install 到设备                                                     │
 │ 11. exit 0 ✅                                                          │
 │                                                                       │
-│  用户可见:"session expired, re-authenticating..." + install 进度      │
+│  用户可见:"license acquired, retrying download..." + install 进度      │
 │           (无 "STDQ" / "password token is expired")                   │
 └───────────────────────────────────────────────────────────────────────┘
 ```
@@ -236,16 +251,17 @@ exit 1 ✅
 
 | Level      | Scope                                                                                | Count |
 | ---------- | ------------------------------------------------------------------------------------ | ----- |
-| **Unit**   | adapter Purchase 错误转换契约(`client_test.go` 新增)                                  | 1     |
-| **E2E**    | handleLicenseRequired 中 Purchase token-expired 路径(`app_download_*test.go` 新增) | 1     |
+| **Unit**   | adapter Purchase 错误转换契约(`client_test.go` 新增 2 个 case)                       | 2     |
+| **E2E**    | handleLicenseRequired 中 Purchase token-expired 路径(`app_download_*test.go` 新增 3 个 case) | 3 |
 | **Regression** | 现有所有测试无回归(`go test ./... -count=1` 全绿)                                 | 201+  |
-| **Manual** | 真实 token 过期后 `device install`(validate 阶段手动)                                | 1     |
+| **Manual** | 真实 token 过期后 `device install`(validate 阶段 **opportunistic**,不阻塞)          | 1     |
 
 ### Key Validation Principles
 
-1. **Adapter 测试是 fix 的直接契约**:验证 sentinel 类型转换正确。
-2. **CLI 测试是端到端契约**:验证 CLI 编排层的 retry 逻辑按预期触发。
-3. **无 mock 需求变化**:CLI 层现有 mock 已支持 `purchaseErr` 字段,无需扩展 mock 接口。
+1. **Adapter 测试是 fix 的直接契约**:验证 sentinel 类型转换正确(E2E-004)和非 sentinel 透传(E2E-005)。
+2. **CLI 测试是端到端契约**:验证 CLI 编排层的 retry 逻辑按预期触发(E2E-001/002/003)。
+3. **NFR-05 stderr 断言**通过 E2E-002 满足(stderr 不含 STDQ / password token is expired)。
+4. **Mock 扩展**:既有 `mockAppStore` 需新增 `purchaseErrors []error` + `purchaseCalls int` + `refreshSessionCalls int` 字段(模仿现有 Download 的序列模式)。
 
 ## 8. Risk Register
 
