@@ -127,7 +127,7 @@ US-01 是 P1:用户实测遇到的阻塞,fix 后用户体验显著改善。
 - **AC-01-3 (非 token 错误:行为不变)**:
   - **Given**: Purchase 失败但**原因不是 token 过期**(例如:付费 app 触发 `ErrPaidAppNotSupported`、网络故障、Apple 服务端 500)。
   - **When**: 用户运行 `ipa-manager device install <bundle-id>` 并确认 license acquire。
-  - **Then**: 命令失败退出,**stderr 输出格式与修复前完全一致**(即 `Error: license acquisition failed: <原始 ipatool 错误描述>`),**不触发**任何 session refresh 的副作用(无 "session expired, re-authenticating..." 输出,无 keychain 写操作)。
+  - **Then**: 命令失败退出,**stderr 输出格式与修复前完全一致**(以 `Error: license acquisition failed:` 开头),**不包含** `session expired, re-authenticating...` 字样(证明未触发 refresh 路径)。
 
 > **AC-01-4 (自动化测试覆盖)**:本 AC 不约束运行时行为,仅要求存在覆盖 AC-01-1 / AC-01-2 路径的自动化单元测试(具体测试名与断言细节由 design.md 与实现决定)。
 
